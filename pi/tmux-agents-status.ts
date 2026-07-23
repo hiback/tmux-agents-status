@@ -78,57 +78,76 @@ export default function (pi: PiAPI) {
 	let settlementPending = false;
 	let canCreate = false;
 
+	function diagnose(operation: string) {
+		console.error(`tmux-agents-status: companion: ${operation} failed`);
+	}
+
+	async function tmux(args: string[], operation: string) {
+		try {
+			const result = await pi.exec("tmux", args);
+			if (result.code === 0) return result.stdout;
+		} catch {
+			diagnose(operation);
+			return;
+		}
+		diagnose(operation);
+	}
+
 	function isActive() {
 		return ownershipStore[ownershipKey]?.activeRuntime === runtime;
 	}
 
 	async function clients() {
-		const result = await pi.exec("tmux", [
-			"list-clients",
-			"-F",
-			"#{client_name}|#{window_id}",
-		]);
-		if (result.code !== 0) return;
-		const lines = result.stdout.trimEnd();
-		if (!lines) return [];
-		return lines.split("\n").map((line) => {
+		const stdout = await tmux(
+			["list-clients", "-F", "#{client_name}|#{window_id}"],
+			"client query",
+		);
+		if (stdout === undefined) return;
+		if (!stdout) return [];
+		const lines = stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
+		if (!lines) {
+			diagnose("client query");
+			return;
+		}
+		const entries = [];
+		for (const line of lines.split("\n")) {
 			const separator = line.lastIndexOf("|");
-			return {
-				name: line.slice(0, separator),
-				window: line.slice(separator + 1),
-			};
-		});
+			const name = line.slice(0, separator);
+			const window = line.slice(separator + 1);
+			if (separator < 1 || !/^@[0-9]+$/.test(window)) {
+				diagnose("client query");
+				return;
+			}
+			entries.push({ name, window });
+		}
+		return entries;
 	}
 
 	async function paneWindow() {
-		const result = await pi.exec("tmux", [
-			"display-message",
-			"-p",
-			"-t",
-			pane,
-			"#{window_id}",
-		]);
-		if (result.code !== 0) return;
-		const window = result.stdout.trimEnd();
-		return /^@[0-9]+$/.test(window) ? window : undefined;
+		const stdout = await tmux(
+			["display-message", "-p", "-t", pane, "#{window_id}"],
+			"pane query",
+		);
+		if (stdout === undefined) return;
+		const window = stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
+		if (/^@[0-9]+$/.test(window)) return window;
+		diagnose("pane query");
 	}
 
 	async function refresh(entries: { name: string }[] | undefined) {
 		if (!entries) return;
 		await Promise.all(
 			entries.map(({ name }) =>
-				pi
-					.exec("tmux", ["refresh-client", "-S", "-t", name])
-					.catch(() => undefined),
+				tmux(["refresh-client", "-S", "-t", name], "refresh"),
 			),
 		);
 	}
 
 	async function currentRecord(): Promise<CurrentRecord> {
-		const result = await pi.exec("tmux", ["show-options", "-s"]);
-		if (result.code !== 0) return { kind: "invalid" };
+		const stdout = await tmux(["show-options", "-s"], "state query");
+		if (stdout === undefined) return { kind: "invalid" };
 		const prefix = `${stateOption} `;
-		const records = result.stdout
+		const records = stdout
 			.split("\n")
 			.filter((line) => line.startsWith(prefix));
 		if (records.length === 0) return { kind: "absent" };
@@ -163,16 +182,11 @@ export default function (pi: PiAPI) {
 
 	async function clearOptions(requireOwnership: boolean) {
 		if (requireOwnership && !(await ownedRecord())) return false;
-		const write = await pi.exec("tmux", [
-			"set-option",
-			"-su",
-			stateOption,
-			";",
-			"set-option",
-			"-su",
-			ackOption,
-		]);
-		if (write.code !== 0) return false;
+		const write = await tmux(
+			["set-option", "-su", stateOption, ";", "set-option", "-su", ackOption],
+			"state write",
+		);
+		if (write === undefined) return false;
 		state = undefined;
 		outcome = undefined;
 		settlementPending = false;
@@ -203,17 +217,20 @@ export default function (pi: PiAPI) {
 			}
 			return;
 		}
-		const write = await pi.exec("tmux", [
-			"set-option",
-			"-s",
-			stateOption,
-			`v1|${process.pid}|${incarnation}|running|-`,
-			";",
-			"set-option",
-			"-su",
-			ackOption,
-		]);
-		if (write.code !== 0) return;
+		const write = await tmux(
+			[
+				"set-option",
+				"-s",
+				stateOption,
+				`v1|${process.pid}|${incarnation}|running|-`,
+				";",
+				"set-option",
+				"-su",
+				ackOption,
+			],
+			"state write",
+		);
+		if (write === undefined) return;
 		state = "running";
 		outcome = undefined;
 		settlementPending = false;
@@ -237,8 +254,8 @@ export default function (pi: PiAPI) {
 		if (window && entries?.some((client) => client.window === window)) {
 			args.push(";", "set-option", "-s", ackOption, generation);
 		}
-		const write = await pi.exec("tmux", args);
-		if (write.code !== 0) return;
+		const write = await tmux(args, "state write");
+		if (write === undefined) return;
 		state = next;
 		settlementPending = false;
 		ownership.claimed = true;
@@ -271,7 +288,7 @@ export default function (pi: PiAPI) {
 				canCreate = true;
 			} else loseOwnership();
 		} catch {
-			return;
+			diagnose("handler");
 		}
 	});
 
@@ -288,7 +305,7 @@ export default function (pi: PiAPI) {
 				await publishAlert("failed");
 			} else await clearOptions(true);
 		} catch {
-			return;
+			diagnose("handler");
 		}
 	});
 
@@ -297,24 +314,29 @@ export default function (pi: PiAPI) {
 		try {
 			await publishRunning();
 		} catch {
-			return;
+			diagnose("handler");
 		}
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		if (!isActive() || ctx.mode !== "tui" || state !== "running") return;
-		if (!event || typeof event !== "object" || !("message" in event)) return;
-		const message = event.message;
-		if (!message || typeof message !== "object" || !("role" in message)) return;
-		if (message.role !== "assistant" || !("stopReason" in message)) return;
-		if (
-			message.stopReason === "stop" ||
-			message.stopReason === "toolUse" ||
-			message.stopReason === "error" ||
-			message.stopReason === "length" ||
-			message.stopReason === "aborted"
-		) {
-			outcome = message.stopReason;
+		try {
+			if (!isActive() || ctx.mode !== "tui" || state !== "running") return;
+			if (!event || typeof event !== "object" || !("message" in event)) return;
+			const message = event.message;
+			if (!message || typeof message !== "object" || !("role" in message))
+				return;
+			if (message.role !== "assistant" || !("stopReason" in message)) return;
+			if (
+				message.stopReason === "stop" ||
+				message.stopReason === "toolUse" ||
+				message.stopReason === "error" ||
+				message.stopReason === "length" ||
+				message.stopReason === "aborted"
+			) {
+				outcome = message.stopReason;
+			}
+		} catch {
+			diagnose("handler");
 		}
 	});
 
@@ -327,7 +349,7 @@ export default function (pi: PiAPI) {
 				outcome === "stop" || outcome === "toolUse" ? "completed" : "failed",
 			);
 		} catch {
-			return;
+			diagnose("handler");
 		}
 	});
 }

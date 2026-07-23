@@ -2,6 +2,7 @@
 set -u
 
 empty() {
+	[ "$#" -eq 0 ] || printf 'tmux-agents-status: render-window: %s\n' "$1" >&2
 	printf '\n'
 	exit 0
 }
@@ -10,22 +11,47 @@ empty() {
 session=$1
 window=$2
 active_pane=$3
-printf '%s\n' "$session" | grep -Eq '^\$[0-9]+$' || empty
-printf '%s\n' "$window" | grep -Eq '^@[0-9]+$' || empty
-printf '%s\n' "$active_pane" | grep -Eq '^%[0-9]+$' || empty
+case $session in \$[0-9]*) case ${session#\$} in *[!0-9]*) empty ;; esac ;; *) empty ;; esac
+case $window in @[0-9]*) case ${window#@} in *[!0-9]*) empty ;; esac ;; *) empty ;; esac
+case $active_pane in %[0-9]*) case ${active_pane#%} in *[!0-9]*) empty ;; esac ;; *) empty ;; esac
 
-root=$(CDPATH= cd "$(dirname "$0")" && pwd -P) || empty
+root=$(CDPATH= cd "$(dirname "$0" 2>/dev/null)" && pwd -P) || empty 'render failed'
 # shellcheck source=state.sh
-. "$root/state.sh" || empty
-tas_load_options || empty
-panes=$(tmux list-panes -t "$session:$window" -F '#{pane_index}|#{pane_id}') || empty
-
-printf '%s\n' "$panes" | sort -t '|' -k1,1n -k2,2 | while IFS='|' read -r _index pane; do
-	tas_read_state "$pane" || continue
-	[ -n "$_tas_glyph" ] || continue
-	tas_present_glyph "$_tas_glyph" "$_tas_style" "$tas_unread" || continue
-done | {
-	IFS= read -r output || :
-	[ -z "${output-}" ] || printf ' %s' "$output"
-	printf '\n'
-}
+. "$root/state.sh" || empty 'render failed'
+tas_load_options || empty 'required query failed'
+panes=$(tmux list-panes -t "$session:$window" -F '#{pane_index}|#{pane_id}' 2>/dev/null && printf x) || empty 'required query failed'
+panes=${panes%x}
+case $panes in
+'') ;;
+*"$tas_newline") panes=${panes%"$tas_newline"} ;;
+*) empty 'required query failed' ;;
+esac
+if [ -n "$panes" ]; then
+	validated=$(printf '%s\n' "$panes" | awk -F '|' '
+		NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^%[0-9]+$/ { exit 1 }
+		{ print }
+	' 2>/dev/null) || empty 'required query failed'
+	ordered=$(printf '%s\n' "$validated" | sort -t '|' -k1,1n -k2,2 2>/dev/null) || empty 'render failed'
+else
+	ordered=
+fi
+output=$(
+	while IFS='|' read -r _index pane; do
+		[ -n "$_index" ] || continue
+		if ! tas_read_state "$pane"; then
+			[ "$tas_error" != query ] || exit 2
+			continue
+		fi
+		[ -n "$_tas_glyph" ] || continue
+		tas_present_glyph "$_tas_glyph" "$_tas_style" "$tas_unread" || exit 1
+	done <<EOF
+$ordered
+EOF
+)
+case $? in
+0) ;;
+2) empty 'required query failed' ;;
+*) empty 'render failed' ;;
+esac
+[ -z "$output" ] || printf ' %s' "$output"
+printf '\n'

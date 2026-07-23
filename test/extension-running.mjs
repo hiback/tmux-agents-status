@@ -7,16 +7,21 @@ const extension = (
 function fakePi({
 	setCode = 0,
 	setCodes,
+	showCode = 0,
 	listCode = 0,
+	displayCode = 0,
 	clients = "client one|@7\nclient-two|@8\n",
 	clientPanes = "client one|%99\nclient-two|%100\n",
 	paneWindow = "@7\n",
 	failedRefresh = "",
+	rejectOperation = "",
+	partialClearAt = 0,
 } = {}) {
 	const calls = [];
 	const handlers = new Map();
 	const server = {};
 	let writeIndex = 0;
+	let clearIndex = 0;
 	return {
 		calls,
 		handlers,
@@ -27,16 +32,21 @@ function fakePi({
 			},
 			async exec(command, args) {
 				calls.push([command, ...args]);
+				if (args[0] === rejectOperation) throw new Error("raw-secret");
 				if (args[0] === "show-options")
 					return {
-						code: 0,
+						code: showCode,
 						stdout:
 							server.state === undefined
 								? ""
 								: `@tmux-agents-status-state-%42 ${server.state}\n`,
-						stderr: "",
+						stderr: "raw-secret",
 					};
 				if (args[0] === "set-option") {
+					if (args[1] === "-su" && ++clearIndex === partialClearAt) {
+						server.state = undefined;
+						return { code: 1, stdout: "", stderr: "raw-secret" };
+					}
 					const code =
 						args[1] === "-su" ? 0 : (setCodes?.[writeIndex++] ?? setCode);
 					if (code === 0) {
@@ -53,20 +63,24 @@ function fakePi({
 							else server[target] = args[index++];
 						}
 					}
-					return { code, stdout: "", stderr: "" };
+					return { code, stdout: "", stderr: "raw-secret" };
 				}
 				if (args[0] === "list-clients")
 					return {
 						code: listCode,
 						stdout: args.at(-1).includes("pane_id") ? clientPanes : clients,
-						stderr: "",
+						stderr: "raw-secret",
 					};
 				if (args[0] === "display-message")
-					return { code: 0, stdout: paneWindow, stderr: "" };
+					return {
+						code: displayCode,
+						stdout: paneWindow,
+						stderr: "raw-secret",
+					};
 				return {
 					code: args.at(-1) === failedRefresh ? 1 : 0,
 					stdout: "",
-					stderr: "",
+					stderr: "raw-secret",
 				};
 			},
 		},
@@ -333,6 +347,166 @@ try {
 		failedAlertPi.calls.length,
 		failedAlertCalls + 6,
 		"refresh must happen only after the successful terminal retry",
+	);
+
+	const diagnostics = [];
+	const originalConsoleError = console.error;
+	console.error = (...args) => diagnostics.push(args.join(" "));
+	try {
+		const readFailure = fakePi({ showCode: 1 });
+		extension(readFailure.api);
+		await initialize(readFailure);
+		await readFailure.handlers.get("agent_start")({}, tui);
+
+		const rejectedRead = fakePi({ rejectOperation: "show-options" });
+		extension(rejectedRead.api);
+		await initialize(rejectedRead);
+		await rejectedRead.handlers.get("agent_start")({}, tui);
+
+		const writeFailure = fakePi({ setCodes: [1] });
+		extension(writeFailure.api);
+		await initialize(writeFailure);
+		await writeFailure.handlers.get("agent_start")({}, tui);
+
+		const clientFailure = fakePi({ listCode: 1 });
+		extension(clientFailure.api);
+		await clientFailure.handlers.get("session_start")(
+			{ reason: "startup" },
+			tui,
+		);
+
+		const refreshFailure = fakePi({ failedRefresh: "client one" });
+		extension(refreshFailure.api);
+		await initialize(refreshFailure);
+		await refreshFailure.handlers.get("agent_start")({}, tui);
+
+		const partialClear = fakePi({ partialClearAt: 2 });
+		extension(partialClear.api);
+		await initialize(partialClear);
+		await partialClear.handlers.get("agent_start")({}, tui);
+		partialClear.server.ack = "persisted-ack";
+		partialClear.calls.length = 0;
+		await partialClear.handlers.get("session_start")({ reason: "switch" }, tui);
+		assert.equal(
+			partialClear.server.state,
+			undefined,
+			"companion state removal persists when acknowledgement removal fails",
+		);
+		assert.equal(
+			partialClear.server.ack,
+			"persisted-ack",
+			"companion does not roll back partial clear persistence",
+		);
+		assert.equal(
+			partialClear.calls.filter((call) => call[1] === "set-option").length,
+			1,
+			"companion attempts the ordered clear once",
+		);
+		assert.deepEqual(
+			partialClear.calls.find((call) => call[1] === "set-option").slice(1),
+			[
+				"set-option",
+				"-su",
+				"@tmux-agents-status-state-%42",
+				";",
+				"set-option",
+				"-su",
+				"@tmux-agents-status-ack-%42",
+			],
+			"companion clears state before acknowledgement",
+		);
+		assert.equal(
+			partialClear.calls.some((call) => call[1] === "refresh-client"),
+			false,
+			"companion does not refresh after partial persistence failure",
+		);
+		await partialClear.handlers.get("session_start")({ reason: "switch" }, tui);
+		assert.equal(
+			partialClear.calls.filter((call) => call[1] === "set-option").length,
+			1,
+			"companion does not retry or roll back a partial clear",
+		);
+
+		for (const paneFailure of [
+			fakePi({ displayCode: 1 }),
+			fakePi({ paneWindow: "@7\n@8\n" }),
+		]) {
+			extension(paneFailure.api);
+			await initialize(paneFailure);
+			await paneFailure.handlers.get("agent_start")({}, tui);
+			await paneFailure.handlers.get("message_end")(assistant("stop"), tui);
+			await paneFailure.handlers.get("agent_settled")({}, tui);
+			const alertWrite = paneFailure.calls.findLast(
+				(call) => call[1] === "set-option" && call[4]?.includes("|completed|"),
+			);
+			assert.equal(
+				alertWrite.length,
+				5,
+				"failed or malformed pane topology never acknowledges visibility",
+			);
+		}
+
+		for (const malformedClients of ["secret-client|bad-window\n", "|@7\n"]) {
+			const clientOutput = fakePi({ clients: malformedClients });
+			extension(clientOutput.api);
+			await initialize(clientOutput);
+			await clientOutput.handlers.get("agent_start")({}, tui);
+			await clientOutput.handlers.get("message_end")(assistant("stop"), tui);
+			await clientOutput.handlers.get("agent_settled")({}, tui);
+			assert.match(
+				clientOutput.server.state,
+				/\|completed\|/,
+				"state persistence continues after malformed visibility output",
+			);
+			assert.equal(
+				clientOutput.server.ack,
+				undefined,
+				"malformed client output cannot acknowledge visibility",
+			);
+			assert.equal(
+				clientOutput.calls.some((call) => call[1] === "refresh-client"),
+				false,
+				"malformed client output cannot choose a refresh target",
+			);
+		}
+
+		const handlerException = fakePi();
+		extension(handlerException.api);
+		await initialize(handlerException);
+		await handlerException.handlers.get("agent_start")({}, tui);
+		await handlerException.handlers.get("message_end")(
+			{
+				get message() {
+					throw new Error("raw-secret handler");
+				},
+			},
+			tui,
+		);
+	} finally {
+		console.error = originalConsoleError;
+	}
+	assert.deepEqual(diagnostics, [
+		"tmux-agents-status: companion: state query failed",
+		"tmux-agents-status: companion: state query failed",
+		"tmux-agents-status: companion: state write failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: refresh failed",
+		"tmux-agents-status: companion: refresh failed",
+		"tmux-agents-status: companion: state write failed",
+		"tmux-agents-status: companion: pane query failed",
+		"tmux-agents-status: companion: pane query failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: client query failed",
+		"tmux-agents-status: companion: handler failed",
+	]);
+	assert.equal(
+		diagnostics.some((line) => line.includes("raw-secret")),
+		false,
+		"companion diagnostics never expose command errors or state",
 	);
 
 	const retryStartPi = fakePi();

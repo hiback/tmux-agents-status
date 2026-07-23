@@ -40,6 +40,7 @@ node "$root/test/extension-running.mjs"
 node "$root/test/lifecycle.mjs"
 "$root/test/acknowledge.sh"
 "$root/test/death-cleanup.sh"
+"$root/test/degradation.sh"
 
 tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test set-hook -g window-pane-changed 'display-message user-hook'
@@ -426,6 +427,7 @@ show-option:-sqv)
 	case $3 in
 	*@tmux-agents-status-state-%9) printf 'v1|%s|11111111-1111-4111-8111-111111111111|failed|44444444-4444-4444-8444-444444444444\n' "$FAKE_OWNER" ;;
 	*@tmux-agents-status-state-%10) printf 'v1|%s|11111111-1111-4111-8111-111111111111|completed|33333333-3333-4333-8333-333333333333\n' "$FAKE_OWNER" ;;
+	*@tmux-agents-status-ack-*) : ;;
 	*) exit 1 ;;
 	esac
 	;;

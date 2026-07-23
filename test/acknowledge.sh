@@ -57,7 +57,7 @@ show-option:-sqv)
 			fi
 		else
 			[ "${FAKE_STATE+x}" = x ] || FAKE_STATE="v1|$FAKE_OWNER|11111111-1111-4111-8111-111111111111|waiting|22222222-2222-4222-8222-222222222222"
-			[ -n "$FAKE_STATE" ] || exit 1
+			[ -n "$FAKE_STATE" ] || exit 0
 			printf '%s\n' "$FAKE_STATE"
 		fi
 		;;
@@ -65,7 +65,7 @@ show-option:-sqv)
 		if [ -n "${FAKE_RACE_ACK-}" ] && [ -s "$FAKE_RACE_ACK" ]; then
 			IFS= read -r FAKE_ACK <"$FAKE_RACE_ACK"
 		fi
-		[ -n "${FAKE_ACK-}" ] || exit 1
+		[ -n "${FAKE_ACK-}" ] || exit 0
 		printf '%s\n' "$FAKE_ACK"
 		;;
 	*) exit 1 ;;
@@ -88,7 +88,9 @@ if ! PATH="$tmp/bin:$PATH" FAKE_TMUX_LOG="$tmp/calls" FAKE_OWNER=$$ \
 	fail 'a visible live alert is acknowledged even when one refresh fails'
 fi
 [ ! -s "$tmp/stdout" ] || fail 'acknowledgement writes no stdout'
-[ ! -s "$tmp/stderr" ] || fail 'best-effort refresh writes no stderr'
+IFS= read -r diagnostic <"$tmp/stderr" || :
+[ "${diagnostic-}" = 'tmux-agents-status: acknowledge: refresh failed' ] || fail 'best-effort refresh failure is diagnosed safely'
+[ "$(wc -l <"$tmp/stderr" | tr -d ' ')" = 1 ] || fail 'best-effort refresh emits one diagnostic'
 
 cat >"$tmp/expected" <<'EOF'
 <list-clients><-F><#{pane_id}>

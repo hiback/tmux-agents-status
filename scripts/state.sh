@@ -1,7 +1,7 @@
 # Private shared state parser and presenter for status renderers.
 
 tas_read_option() {
-	tas_option=$(tmux show-option -gqv "$1" && printf x) || return 1
+	tas_option=$(tmux show-option -gqv "$1" 2>/dev/null && printf x) || return 1
 	tas_option=${tas_option%x}
 	case $tas_option in
 	*"$tas_newline") tas_option=${tas_option%"$tas_newline"} ;;
@@ -42,15 +42,27 @@ tas_load_options() {
 }
 
 tas_read_state() {
+	tas_error=
 	tas_pane=$1
-	tas_record=$(tmux show-option -sqv "@tmux-agents-status-state-$tas_pane" && printf x) || return 1
+	tas_record=$(tmux show-option -sqv "@tmux-agents-status-state-$tas_pane" 2>/dev/null && printf x) || {
+		tas_error=query
+		return 1
+	}
 	tas_record=${tas_record%x}
 	tas_record=${tas_record%"$tas_newline"}
 	case $tas_record in
 	*'
 '*) return 1 ;;
 	esac
-	printf '%s\n' "$tas_record" | grep -Eq "^v1\\|[1-9][0-9]*\\|$tas_uuid\\|(running\\|-|(waiting|completed|failed)\\|$tas_uuid)$" || return 1
+	printf '%s\n' "$tas_record" | grep -Eq "^v1\\|[1-9][0-9]*\\|$tas_uuid\\|(running\\|-|(waiting|completed|failed)\\|$tas_uuid)$" 2>/dev/null
+	case $? in
+	0) ;;
+	1) return 1 ;;
+	*)
+		tas_error=query
+		return 1
+		;;
+	esac
 
 	tas_owner=${tas_record#v1|}
 	tas_owner=${tas_owner%%|*}
@@ -98,16 +110,25 @@ tas_read_state() {
 	esac
 
 	if [ "$tas_unread" = true ]; then
-		tas_ack=$(tmux show-option -sqv "@tmux-agents-status-ack-$tas_pane" && printf x) || tas_ack=x
+		tas_ack=$(tmux show-option -sqv "@tmux-agents-status-ack-$tas_pane" 2>/dev/null && printf x) || {
+			tas_error=query
+			return 1
+		}
 		tas_ack=${tas_ack%x}
 		tas_ack=${tas_ack%"$tas_newline"}
 		case $tas_ack in
 		*'
 '*) tas_ack= ;;
 		esac
-		if printf '%s\n' "$tas_ack" | grep -Eq "^($tas_uuid|dead-$tas_uuid)$" && [ "$tas_ack" = "$tas_generation" ]; then
-			tas_unread=false
-		fi
+		printf '%s\n' "$tas_ack" | grep -Eq "^($tas_uuid|dead-$tas_uuid)$" 2>/dev/null
+		case $? in
+		0) [ "$tas_ack" != "$tas_generation" ] || tas_unread=false ;;
+		1) ;;
+		*)
+			tas_error=query
+			return 1
+			;;
+		esac
 	fi
 	[ "$tas_live" = true ] || [ "$tas_unread" = true ]
 }
@@ -116,7 +137,7 @@ tas_present_glyph() {
 	tas_present_value=$1
 	tas_present_style=$2
 	tas_present_unread=$3
-	tas_present_escaped=$(printf '%s' "$tas_present_value" | sed 's/#/##/g') || return 1
+	tas_present_escaped=$(printf '%s' "$tas_present_value" | sed 's/#/##/g' 2>/dev/null) || return 1
 	if [ "$tas_present_unread" = true ] && [ -n "$tas_unread_style" ]; then
 		tas_present_style=${tas_present_style:+$tas_present_style,}$tas_unread_style
 	fi
