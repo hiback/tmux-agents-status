@@ -1,0 +1,22 @@
+#!/bin/sh
+set -u
+
+[ "$#" -eq 1 ] || exit 0
+pane=$1
+printf '%s\n' "$pane" | grep -Eq '^%[0-9]+$' || exit 0
+
+tmux list-clients -F '#{pane_id}' 2>/dev/null | grep -Fx "$pane" >/dev/null || exit 0
+
+root=$(CDPATH= cd "$(dirname "$0")" && pwd -P) || exit 0
+# shellcheck source=state.sh
+. "$root/state.sh" || exit 0
+tas_load_schema
+tas_read_state "$pane" || exit 0
+[ "$tas_state" != running ] && [ "$tas_unread" = true ] || exit 0
+
+tmux set-option -s "@tmux-agents-status-ack-$pane" "$tas_generation" >/dev/null 2>&1 || exit 0
+clients=$(tmux list-clients -F '#{client_name}' 2>/dev/null) || exit 0
+printf '%s\n' "$clients" | while IFS= read -r client; do
+	[ -n "$client" ] || continue
+	tmux refresh-client -S -t "$client" >/dev/null 2>&1 || :
+done

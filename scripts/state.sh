@@ -13,10 +13,14 @@ tas_read_option() {
 	esac
 }
 
-tas_load_options() {
+tas_load_schema() {
 	tas_uuid='[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}'
 	tas_newline='
 '
+}
+
+tas_load_options() {
+	tas_load_schema
 	tas_read_option @tmux-agents-status-running-glyph || return 1
 	tas_running_glyph=$tas_option
 	tas_read_option @tmux-agents-status-running-style || return 1
@@ -59,23 +63,23 @@ tas_read_state() {
 	tas_generation=${tas_fields#*|}
 	case $tas_state in
 	running)
-		_tas_glyph=$tas_running_glyph
-		_tas_style=$tas_running_style
+		_tas_glyph=${tas_running_glyph-}
+		_tas_style=${tas_running_style-}
 		tas_unread=false
 		;;
 	waiting)
-		_tas_glyph=$tas_waiting_glyph
-		_tas_style=$tas_waiting_style
+		_tas_glyph=${tas_waiting_glyph-}
+		_tas_style=${tas_waiting_style-}
 		tas_unread=true
 		;;
 	completed)
-		_tas_glyph=$tas_completed_glyph
-		_tas_style=$tas_completed_style
+		_tas_glyph=${tas_completed_glyph-}
+		_tas_style=${tas_completed_style-}
 		tas_unread=true
 		;;
 	failed)
-		_tas_glyph=$tas_failed_glyph
-		_tas_style=$tas_failed_style
+		_tas_glyph=${tas_failed_glyph-}
+		_tas_style=${tas_failed_style-}
 		tas_unread=true
 		;;
 	esac

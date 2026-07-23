@@ -15,6 +15,14 @@ fi
 root=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 
 tmux set-option -g @tmux-agents-status-root "$root"
+for hook in window-pane-changed session-window-changed client-session-changed; do
+    marker=@tmux-agents-status-hook-$hook
+    if ! tmux show-option -s "$marker" >/dev/null 2>&1; then
+        tmux set-hook -ag "$hook" 'run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
+        tmux set-option -s "$marker" 1
+    fi
+done
+
 tmux set-option -goq @tmux-agents-status-window '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})'
 tmux set-option -goq @tmux-agents-status-other-sessions '#(#{q:@tmux-agents-status-root}/scripts/render-other-sessions #{q:session_id})'
 tmux set-option -goq @tmux-agents-status-running-glyph '•'

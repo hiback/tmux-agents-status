@@ -8,6 +8,8 @@ mkdir "$tmp"
 
 cleanup() {
 	tmux -L "$socket" kill-server >/dev/null 2>&1 || :
+	[ -z "${control_pid-}" ] || kill "$control_pid" >/dev/null 2>&1 || :
+	[ -z "${control_pid-}" ] || wait "$control_pid" 2>/dev/null || :
 	rm -rf "$tmp"
 }
 trap cleanup 0
@@ -30,9 +32,15 @@ option() {
 	tmux_test show-option -gqv "$1"
 }
 
+server_option() {
+	tmux_test show-option -sqv "$1"
+}
+
 node "$root/test/extension-running.mjs"
+"$root/test/acknowledge.sh"
 
 tmux_test -f /dev/null new-session -d -s acceptance
+tmux_test set-hook -g window-pane-changed 'display-message user-hook'
 tmux_test run-shell "$root/tmux-agents-status.tmux"
 
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is installed'
@@ -47,6 +55,15 @@ assert_equal 'fg=green' "$(option @tmux-agents-status-completed-style)" 'complet
 assert_equal '!' "$(option @tmux-agents-status-failed-glyph)" 'failed glyph default is installed'
 assert_equal 'fg=red' "$(option @tmux-agents-status-failed-style)" 'failed style default is installed'
 assert_equal 'reverse,bold' "$(option @tmux-agents-status-unread-style)" 'unread style default is installed'
+
+hook_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
+assert_equal '1' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'window-pane hook marker is installed'
+assert_equal '1' "$(server_option @tmux-agents-status-hook-session-window-changed)" 'session-window hook marker is installed'
+assert_equal '1' "$(server_option @tmux-agents-status-hook-client-session-changed)" 'client-session hook marker is installed'
+assert_equal "window-pane-changed[0] display-message user-hook
+window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'the pane-selection hook appends after a user handler'
+assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'the window-selection hook is installed'
+assert_equal "client-session-changed[0] $hook_command" "$(tmux_test show-hooks -g client-session-changed)" 'the session-selection hook is installed'
 
 # Loading after user customization must preserve theme-owned formats and plugin overrides.
 tmux_test set-option -g window-status-format 'custom window'
@@ -84,6 +101,121 @@ assert_equal '' "$(option @tmux-agents-status-failed-glyph)" 'empty failed glyph
 assert_equal 'fg=magenta' "$(option @tmux-agents-status-failed-style)" 'failed style override is preserved'
 assert_equal 'underscore' "$(option @tmux-agents-status-unread-style)" 'unread style override is preserved'
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is refreshed on every load'
+assert_equal "window-pane-changed[0] display-message user-hook
+window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'repeated loads do not duplicate the appended pane hook'
+assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'repeated loads do not duplicate the appended window hook'
+assert_equal "client-session-changed[0] $hook_command" "$(tmux_test show-hooks -g client-session-changed)" 'repeated loads do not duplicate the appended session hook'
+
+# Missing registration resumes independently without disturbing completed hooks.
+tmux_test set-hook -gu session-window-changed
+tmux_test set-option -su @tmux-agents-status-hook-session-window-changed
+tmux_test run-shell "$root/tmux-agents-status.tmux"
+assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'a missing hook registration resumes on reload'
+assert_equal "window-pane-changed[0] display-message user-hook
+window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'resuming one hook leaves completed hook arrays unchanged'
+
+# Hook commands resolve the current root when the event fires, including spaces.
+relocated_root="$tmp/relocated root"
+mkdir -p "$relocated_root/scripts"
+cat >"$relocated_root/scripts/acknowledge" <<'EOF'
+#!/bin/sh
+tmux set-option -s @tmux-agents-status-hook-observed "$1"
+tmux wait-for -S tmux-agents-status-hook-observed
+EOF
+chmod +x "$relocated_root/scripts/acknowledge"
+tmux_test set-option -g @tmux-agents-status-root "$relocated_root"
+hook_window=$(tmux_test new-window -d -P -F '#{window_id}')
+hook_pane=$(tmux_test split-window -d -t "$hook_window" -P -F '#{pane_id}')
+tmux_test select-pane -t "$hook_pane" \; wait-for tmux-agents-status-hook-observed
+assert_equal "$hook_pane" "$(server_option @tmux-agents-status-hook-observed)" 'selection hooks invoke the acknowledgement command from the current root'
+tmux_test kill-window -t "$hook_window"
+tmux_test run-shell "$root/tmux-agents-status.tmux"
+
+# Exercise each plugin hook through tmux with a real attached control-mode client.
+control_fifo=$tmp/control-input
+mkfifo "$control_fifo"
+tmux -L "$socket" -C attach-session -t acceptance <"$control_fifo" >"$tmp/control-output" 2>"$tmp/control-error" &
+control_pid=$!
+exec 9>"$control_fifo"
+control_client=
+tries=0
+while [ "$tries" -lt 5 ]; do
+	control_client=$(tmux_test list-clients -F '#{client_name}')
+	[ -n "$control_client" ] && break
+	tries=$((tries + 1))
+	sleep 1
+done
+[ -n "$control_client" ] || fail 'an actual attached client is available for selection-hook acceptance'
+
+set -- $(tmux_test new-session -d -s acknowledgement-hooks -P -F '#{session_id} #{window_id} #{pane_id}')
+visit_session=$1
+visit_window=$2
+away_pane=$3
+visit_pane=$(tmux_test split-window -d -t "$visit_session:$visit_window" -P -F '#{pane_id}')
+tmux_test switch-client -c "$control_client" -t "$visit_session"
+incarnation=11111111-1111-4111-8111-111111111111
+waiting_generation=22222222-2222-4222-8222-222222222222
+completed_generation=33333333-3333-4333-8333-333333333333
+failed_generation=44444444-4444-4444-8444-444444444444
+rapid_generation=55555555-5555-4555-8555-555555555555
+tmux_test set-option -g @tmux-agents-status-failed-glyph 'F'
+server_tmux="$(tmux_test display-message -p '#{socket_path}'),$$,0"
+render_window() {
+	TMUX="$server_tmux" "$root/scripts/render-window" "$@"
+}
+
+visit_state="v1|$$|$incarnation|waiting|$waiting_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$visit_state"
+assert_equal ' #[fg=black,underscore]W#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'the pane-hook destination starts unread'
+tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-window-pane-acknowledged'
+tmux_test select-pane -t "$visit_pane" \; wait-for tas-window-pane-acknowledged
+assert_equal "$waiting_generation" "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'window-pane-changed acknowledges the generation visible to an attached client'
+assert_equal "$visit_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'window-pane-changed leaves actual state intact'
+assert_equal ' #[fg=black]W#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'window-pane-changed removes only unread emphasis'
+tmux_test set-hook -gu 'window-pane-changed[2]'
+
+rapid_state="v1|$$|$incarnation|waiting|$rapid_generation"
+tmux_test select-pane -t "$away_pane"
+tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$rapid_state"
+tmux_test set-option -su "@tmux-agents-status-ack-$visit_pane"
+tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-rapid-pane-checked'
+tmux_test select-pane -t "$visit_pane" \; select-pane -t "$away_pane" \; wait-for tas-rapid-pane-checked
+assert_equal "$away_pane" "$(tmux_test display-message -p -c "$control_client" '#{pane_id}')" 'programmatic select-away leaves the alert invisible at acknowledgement time'
+assert_equal '' "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'rapid invisible selection is not acknowledged'
+assert_equal "$rapid_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'rapid selection leaves actual state intact'
+assert_equal ' #[fg=black,underscore]W#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'rapid invisible selection remains unread'
+tmux_test set-hook -gu 'window-pane-changed[2]'
+
+set -- $(tmux_test new-window -d -t "$visit_session:" -P -F '#{window_id} #{pane_id}')
+visit_other_window=$1
+visit_other_pane=$2
+window_state="v1|$$|$incarnation|completed|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$visit_other_pane" "$window_state"
+assert_equal ' #[fg=blue,underscore]C#[default]' "$(render_window "$visit_session" "$visit_other_window" "$visit_other_pane")" 'the window-hook destination starts unread'
+tmux_test set-hook -ag session-window-changed 'wait-for -S tas-session-window-acknowledged'
+tmux_test select-window -t "$visit_session:$visit_other_window" \; wait-for tas-session-window-acknowledged
+assert_equal "$completed_generation" "$(server_option "@tmux-agents-status-ack-$visit_other_pane")" 'session-window-changed acknowledges the generation visible to an attached client'
+assert_equal "$window_state" "$(server_option "@tmux-agents-status-state-$visit_other_pane")" 'session-window-changed leaves actual state intact'
+assert_equal ' #[fg=blue]C#[default]' "$(render_window "$visit_session" "$visit_other_window" "$visit_other_pane")" 'session-window-changed removes only unread emphasis'
+tmux_test set-hook -gu 'session-window-changed[1]'
+
+set -- $(tmux_test new-session -d -s acknowledgement-destination -P -F '#{session_id} #{window_id} #{pane_id}')
+visit_other_session=$1
+visit_session_window=$2
+visit_session_pane=$3
+session_state="v1|$$|$incarnation|failed|$failed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$visit_session_pane" "$session_state"
+assert_equal ' #[fg=magenta,underscore]F#[default]' "$(render_window "$visit_other_session" "$visit_session_window" "$visit_session_pane")" 'the client-hook destination starts unread'
+tmux_test set-hook -ag client-session-changed 'wait-for -S tas-client-session-acknowledged'
+tmux_test switch-client -c "$control_client" -t "$visit_other_session" \; wait-for tas-client-session-acknowledged
+assert_equal "$failed_generation" "$(server_option "@tmux-agents-status-ack-$visit_session_pane")" 'client-session-changed acknowledges the generation visible to an attached client'
+assert_equal "$session_state" "$(server_option "@tmux-agents-status-state-$visit_session_pane")" 'client-session-changed leaves actual state intact'
+assert_equal ' #[fg=magenta]F#[default]' "$(render_window "$visit_other_session" "$visit_session_window" "$visit_session_pane")" 'client-session-changed removes only unread emphasis'
+tmux_test set-hook -gu 'client-session-changed[1]'
+
+tmux_test switch-client -c "$control_client" -t acceptance
+tmux_test kill-session -t acknowledgement-hooks
+tmux_test kill-session -t acknowledgement-destination
 
 # Current-window rendering reads only valid live running records in the supplied window.
 set -- $(tmux_test display-message -p -t acceptance: '#{session_id} #{window_id} #{pane_id}')
