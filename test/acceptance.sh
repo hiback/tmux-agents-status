@@ -39,6 +39,7 @@ server_option() {
 node "$root/test/extension-running.mjs"
 node "$root/test/lifecycle.mjs"
 "$root/test/acknowledge.sh"
+"$root/test/death-cleanup.sh"
 
 tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test set-hook -g window-pane-changed 'display-message user-hook'
@@ -173,6 +174,22 @@ tmux_test select-pane -t "$visit_pane" \; wait-for tas-window-pane-acknowledged
 assert_equal "$waiting_generation" "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'window-pane-changed acknowledges the generation visible to an attached client'
 assert_equal "$visit_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'window-pane-changed leaves actual state intact'
 assert_equal ' #[fg=black]W#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'window-pane-changed removes only unread emphasis'
+tmux_test set-hook -gu 'window-pane-changed[2]'
+
+tmux_test select-pane -t "$away_pane"
+sleep 60 &
+abrupt_owner=$!
+virtual_state="v1|$abrupt_owner|$incarnation|running|-"
+tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$virtual_state"
+tmux_test set-option -su "@tmux-agents-status-ack-$visit_pane"
+kill "$abrupt_owner"
+wait "$abrupt_owner" 2>/dev/null || :
+assert_equal ' #[fg=magenta,underscore]F#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'abrupt owner death derives a visible virtual failure'
+tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-virtual-failure-acknowledged'
+tmux_test select-pane -t "$visit_pane" \; wait-for tas-virtual-failure-acknowledged
+assert_equal "dead-$incarnation" "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'visiting a virtual failure acknowledges its deterministic effective generation'
+assert_equal "$virtual_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'acknowledging a virtual failure leaves stored state intact'
+assert_equal '' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'acknowledged dead-owner state is hidden'
 tmux_test set-hook -gu 'window-pane-changed[2]'
 
 rapid_state="v1|$$|$incarnation|waiting|$rapid_generation"

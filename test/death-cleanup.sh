@@ -1,0 +1,168 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
+socket=tmux-agents-status-death-cleanup-$$
+tmp=${TMPDIR:-/tmp}/tmux-agents-status-death-cleanup-$$
+mkdir "$tmp"
+
+cleanup() {
+	tmux -L "$socket" kill-server >/dev/null 2>&1 || :
+	[ -z "${owner-}" ] || kill "$owner" >/dev/null 2>&1 || :
+	[ -z "${owner-}" ] || wait "$owner" 2>/dev/null || :
+	rm -rf "$tmp"
+}
+trap cleanup 0
+trap 'exit 1' 1 2 3 15
+
+fail() {
+	printf 'not ok - %s\n' "$1" >&2
+	exit 1
+}
+
+assert_equal() {
+	[ "$1" = "$2" ] || fail "$3 (expected '$1', got '$2')"
+}
+
+tmux_test() {
+	tmux -L "$socket" "$@"
+}
+
+tmux_test -f /dev/null new-session -d -s death-cleanup
+set -- $(tmux_test display-message -p '#{session_id} #{window_id} #{pane_id} #{socket_path}')
+session=$1
+window=$2
+pane=$3
+socket_path=$4
+for option in \
+	running-glyph:R running-style: \
+	waiting-glyph:W waiting-style: \
+	completed-glyph:C completed-style: \
+	failed-glyph:F failed-style: \
+	unread-style:reverse; do
+	name=${option%%:*}
+	value=${option#*:}
+	tmux_test set-option -g "@tmux-agents-status-$name" "$value"
+done
+server_tmux=$socket_path,$$,0
+render() {
+	TMUX="$server_tmux" "$root/scripts/render-window" "$session" "$window" "$pane"
+}
+server_option() {
+	tmux_test show-option -sqv "$1"
+}
+
+incarnation=11111111-1111-4111-8111-111111111111
+completed_generation=22222222-2222-4222-8222-222222222222
+failed_generation=33333333-3333-4333-8333-333333333333
+sleep 60 &
+owner=$!
+running="v1|$owner|$incarnation|running|-"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "$running"
+kill "$owner"
+wait "$owner" 2>/dev/null || :
+owner=
+assert_equal ' #[reverse]F#[default]' "$(render)" 'dead running derives an unread virtual failure'
+assert_equal "$running" "$(server_option "@tmux-agents-status-state-$pane")" 'virtual failure rendering leaves stored state unchanged'
+other_dead_pane=$(tmux_test new-session -d -s dead-other -P -F '#{pane_id}')
+tmux_test set-option -s "@tmux-agents-status-state-$other_dead_pane" "$running"
+assert_equal 'dead-other:#[reverse]F#[default] ' "$(TMUX="$server_tmux" "$root/scripts/render-other-sessions" "$session")" 'other-session rendering exposes the same virtual failure'
+tmux_test set-option -s "@tmux-agents-status-ack-$other_dead_pane" "dead-$incarnation"
+assert_equal '' "$(TMUX="$server_tmux" "$root/scripts/render-other-sessions" "$session")" 'other-session rendering hides an acknowledged virtual failure'
+tmux_test set-option -s "@tmux-agents-status-ack-$pane" "dead-$incarnation"
+assert_equal '' "$(render)" 'acknowledged virtual failure is hidden'
+
+waiting="v1|99999999|$incarnation|waiting|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "$waiting"
+tmux_test set-option -su "@tmux-agents-status-ack-$pane"
+assert_equal ' #[reverse]F#[default]' "$(render)" 'dead waiting derives the same deterministic virtual failure'
+
+completed="v1|99999999|$incarnation|completed|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "$completed"
+assert_equal ' #[reverse]C#[default]' "$(render)" 'dead completed preserves its recorded terminal state and generation'
+tmux_test set-option -s "@tmux-agents-status-ack-$pane" "$completed_generation"
+assert_equal '' "$(render)" 'acknowledged dead completed state is hidden'
+
+failed="v1|99999999|$incarnation|failed|$failed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "$failed"
+tmux_test set-option -su "@tmux-agents-status-ack-$pane"
+assert_equal ' #[reverse]F#[default]' "$(render)" 'dead failed preserves its recorded terminal state and generation'
+
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|completed|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-ack-$pane" "$completed_generation"
+assert_equal ' C' "$(render)" 'acknowledgement preserves a live terminal state'
+
+cleanup_pane=$(tmux_test split-window -d -P -F '#{pane_id}')
+tmux_test set-option -s "@tmux-agents-status-state-$cleanup_pane" "v1|$$|$incarnation|completed|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-ack-$cleanup_pane" "$completed_generation"
+TMUX="$server_tmux" "$root/scripts/cleanup-pane" "$cleanup_pane"
+assert_equal '' "$(server_option "@tmux-agents-status-state-$cleanup_pane")" 'pane cleanup removes state'
+assert_equal '' "$(server_option "@tmux-agents-status-ack-$cleanup_pane")" 'pane cleanup removes acknowledgement after state'
+
+live_state="v1|$$|$incarnation|running|-"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "$live_state"
+tmux_test set-option -s "@tmux-agents-status-ack-$pane" "$failed_generation"
+malformed_pane=$(tmux_test split-window -d -P -F '#{pane_id}')
+tmux_test set-option -s "@tmux-agents-status-state-$malformed_pane" 'v1|malformed'
+tmux_test set-option -s "@tmux-agents-status-ack-$malformed_pane" 'malformed-ack'
+dead_pane=$(tmux_test split-window -d -P -F '#{pane_id}')
+tmux_test set-option -s "@tmux-agents-status-state-$dead_pane" "$failed"
+tmux_test set-option -su "@tmux-agents-status-ack-$dead_pane"
+for stale in %999991 %999992; do
+	tmux_test set-option -s "@tmux-agents-status-state-$stale" "$failed"
+	tmux_test set-option -s "@tmux-agents-status-ack-$stale" "$failed_generation"
+done
+TMUX="$server_tmux" "$root/scripts/cleanup-stale"
+for stale in %999991 %999992; do
+	assert_equal '' "$(server_option "@tmux-agents-status-state-$stale")" 'startup cleanup removes stale state'
+	assert_equal '' "$(server_option "@tmux-agents-status-ack-$stale")" 'startup cleanup removes stale acknowledgement'
+done
+assert_equal "$live_state" "$(server_option "@tmux-agents-status-state-$pane")" 'startup cleanup never changes live-owner state'
+assert_equal "$failed_generation" "$(server_option "@tmux-agents-status-ack-$pane")" 'startup cleanup leaves live-owner acknowledgement unchanged'
+assert_equal 'v1|malformed' "$(server_option "@tmux-agents-status-state-$malformed_pane")" 'startup cleanup preserves malformed records in existing panes'
+assert_equal 'malformed-ack' "$(server_option "@tmux-agents-status-ack-$malformed_pane")" 'startup cleanup preserves acknowledgement in existing panes'
+assert_equal "$failed" "$(server_option "@tmux-agents-status-state-$dead_pane")" 'startup cleanup preserves unacknowledged dead terminal state in an existing pane'
+
+tmux_test set-hook -g pane-exited 'display-message user-pane-hook'
+tmux_test set-option -s @tmux-agents-status-state-%999993 "$failed"
+tmux_test set-option -s @tmux-agents-status-ack-%999993 "$failed_generation"
+TMUX="$server_tmux" "$root/tmux-agents-status.tmux"
+assert_equal '' "$(server_option @tmux-agents-status-state-%999993)" 'plugin startup invokes stale cleanup'
+assert_equal '1' "$(server_option @tmux-agents-status-hook-pane-exited)" 'pane-exit hook marker is installed'
+cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
+assert_equal "pane-exited[0] display-message user-pane-hook
+pane-exited[1] $cleanup_command" "$(tmux_test show-hooks -g pane-exited)" 'pane-exit cleanup appends after a user hook'
+TMUX="$server_tmux" "$root/tmux-agents-status.tmux"
+assert_equal "pane-exited[0] display-message user-pane-hook
+pane-exited[1] $cleanup_command" "$(tmux_test show-hooks -g pane-exited)" 'plugin reload does not duplicate pane-exit cleanup'
+
+hook_pane=$(tmux_test split-window -d -P -F '#{pane_id}' 'sleep 60')
+tmux_test set-option -s "@tmux-agents-status-state-$hook_pane" "$failed"
+tmux_test set-option -s "@tmux-agents-status-ack-$hook_pane" "$failed_generation"
+tmux_test send-keys -t "$hook_pane" C-c
+tries=0
+while [ "$tries" -lt 20 ] && { [ -n "$(server_option "@tmux-agents-status-state-$hook_pane")" ] || [ -n "$(server_option "@tmux-agents-status-ack-$hook_pane")" ]; }; do
+	sleep .05
+	tries=$((tries + 1))
+done
+assert_equal '' "$(server_option "@tmux-agents-status-state-$hook_pane")" 'pane exit removes state through the installed hook'
+assert_equal '' "$(server_option "@tmux-agents-status-ack-$hook_pane")" 'pane exit removes acknowledgement through the installed hook'
+
+relocated_root="$tmp/relocated root"
+mkdir -p "$relocated_root/scripts"
+cat >"$relocated_root/scripts/cleanup-pane" <<'EOF'
+#!/bin/sh
+tmux set-option -s @tmux-agents-status-cleanup-observed "$1"
+EOF
+chmod +x "$relocated_root/scripts/cleanup-pane"
+tmux_test set-option -g @tmux-agents-status-root "$relocated_root"
+relocated_pane=$(tmux_test split-window -d -P -F '#{pane_id}' 'sleep 60')
+tmux_test send-keys -t "$relocated_pane" C-c
+tries=0
+while [ "$tries" -lt 20 ] && [ -z "$(server_option @tmux-agents-status-cleanup-observed)" ]; do
+	sleep .05
+	tries=$((tries + 1))
+done
+assert_equal "$relocated_pane" "$(server_option @tmux-agents-status-cleanup-observed)" 'pane-exit hook resolves the current root when invoked'
+
+printf 'ok - owner death derives failure and event cleanup removes stale records\n'

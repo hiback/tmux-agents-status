@@ -22,6 +22,12 @@ for hook in window-pane-changed session-window-changed client-session-changed; d
         tmux set-option -s "$marker" 1
     fi
 done
+marker=@tmux-agents-status-hook-pane-exited
+if ! tmux show-option -s "$marker" >/dev/null 2>&1; then
+    tmux set-hook -ag pane-exited 'run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
+    tmux set-option -s "$marker" 1
+fi
+"$root/scripts/cleanup-stale" || :
 
 tmux set-option -goq @tmux-agents-status-window '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})'
 tmux set-option -goq @tmux-agents-status-other-sessions '#(#{q:@tmux-agents-status-root}/scripts/render-other-sessions #{q:session_id})'

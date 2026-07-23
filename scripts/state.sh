@@ -62,18 +62,25 @@ tas_read_state() {
 
 	tas_fields=${tas_record#*|}
 	tas_fields=${tas_fields#*|}
+	tas_incarnation=${tas_fields%%|*}
 	tas_fields=${tas_fields#*|}
 	tas_state=${tas_fields%%|*}
 	tas_generation=${tas_fields#*|}
+	if [ "$tas_live" = false ]; then
+		case $tas_state in
+		running | waiting)
+			tas_state=failed
+			tas_generation=dead-$tas_incarnation
+			;;
+		esac
+	fi
 	case $tas_state in
 	running)
-		[ "$tas_live" = true ] || return 1
 		_tas_glyph=${tas_running_glyph-}
 		_tas_style=${tas_running_style-}
 		tas_unread=false
 		;;
 	waiting)
-		[ "$tas_live" = true ] || return 1
 		_tas_glyph=${tas_waiting_glyph-}
 		_tas_style=${tas_waiting_style-}
 		tas_unread=true
@@ -98,7 +105,7 @@ tas_read_state() {
 		*'
 '*) tas_ack= ;;
 		esac
-		if printf '%s\n' "$tas_ack" | grep -Eq "^$tas_uuid$" && [ "$tas_ack" = "$tas_generation" ]; then
+		if printf '%s\n' "$tas_ack" | grep -Eq "^($tas_uuid|dead-$tas_uuid)$" && [ "$tas_ack" = "$tas_generation" ]; then
 			tas_unread=false
 		fi
 	fi

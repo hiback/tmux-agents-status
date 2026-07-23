@@ -1,0 +1,32 @@
+#!/bin/sh
+set -u
+
+panes=$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null) || exit 0
+options=$(tmux show-options -s 2>/dev/null) || exit 0
+option_names=$(printf '%s\n' "$options" | awk '{print $1}')
+removed=' '
+changed=false
+while IFS= read -r option; do
+	case $option in
+	@tmux-agents-status-state-*) pane=${option#@tmux-agents-status-state-} ;;
+	@tmux-agents-status-ack-*) pane=${option#@tmux-agents-status-ack-} ;;
+	*) continue ;;
+	esac
+	printf '%s\n' "$pane" | grep -Eq '^%[0-9]+$' || continue
+	printf '%s\n' "$panes" | grep -Fx "$pane" >/dev/null && continue
+	case $removed in
+	*" $pane "*) continue ;;
+	esac
+	tmux set-option -su "@tmux-agents-status-state-$pane" \; \
+		set-option -su "@tmux-agents-status-ack-$pane" >/dev/null 2>&1 || continue
+	removed="$removed$pane "
+	changed=true
+done <<EOF
+$option_names
+EOF
+[ "$changed" = true ] || exit 0
+clients=$(tmux list-clients -F '#{client_name}' 2>/dev/null) || exit 0
+printf '%s\n' "$clients" | while IFS= read -r client; do
+	[ -n "$client" ] || continue
+	tmux refresh-client -S -t "$client" >/dev/null 2>&1 || :
+done

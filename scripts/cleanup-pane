@@ -1,0 +1,14 @@
+#!/bin/sh
+set -u
+
+[ "$#" -eq 1 ] || exit 0
+pane=$1
+printf '%s\n' "$pane" | grep -Eq '^%[0-9]+$' || exit 0
+
+tmux set-option -su "@tmux-agents-status-state-$pane" \; \
+	set-option -su "@tmux-agents-status-ack-$pane" >/dev/null 2>&1 || exit 0
+clients=$(tmux list-clients -F '#{client_name}' 2>/dev/null) || exit 0
+printf '%s\n' "$clients" | while IFS= read -r client; do
+	[ -n "$client" ] || continue
+	tmux refresh-client -S -t "$client" >/dev/null 2>&1 || :
+done

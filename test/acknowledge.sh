@@ -118,6 +118,14 @@ assert_no_write 'live running records are no-ops' env FAKE_STATE="v1|$$|11111111
 assert_no_write 'the current generation is not acknowledged twice' env FAKE_ACK='22222222-2222-4222-8222-222222222222' "$root/scripts/acknowledge" '%42'
 
 : >"$tmp/calls"
+PATH="$tmp/bin:$PATH" FAKE_TMUX_LOG="$tmp/calls" FAKE_OWNER=99999999 \
+	"$root/scripts/acknowledge" '%42'
+grep -q '<set-option><-s><@tmux-agents-status-ack-%42><dead-11111111-1111-4111-8111-111111111111>' "$tmp/calls" ||
+	fail 'a visible virtual failure acknowledges its effective generation'
+! grep -q '<set-option><-s><@tmux-agents-status-state-' "$tmp/calls" ||
+	fail 'acknowledging a virtual failure does not rewrite state'
+
+: >"$tmp/calls"
 PATH="$tmp/bin:$PATH" FAKE_TMUX_LOG="$tmp/calls" FAKE_OWNER=$$ FAKE_SET_CODE=1 \
 	"$root/scripts/acknowledge" '%42'
 ! grep -q '<refresh-client>' "$tmp/calls" || fail 'failed persistence does not refresh clients'
