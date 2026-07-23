@@ -37,6 +37,7 @@ server_option() {
 }
 
 node "$root/test/extension-running.mjs"
+node "$root/test/lifecycle.mjs"
 "$root/test/acknowledge.sh"
 
 tmux_test -f /dev/null new-session -d -s acceptance

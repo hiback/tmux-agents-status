@@ -15,22 +15,46 @@ function fakePi({
 } = {}) {
 	const calls = [];
 	const handlers = new Map();
+	const server = {};
 	let writeIndex = 0;
 	return {
 		calls,
 		handlers,
+		server,
 		api: {
 			on(event, handler) {
 				handlers.set(event, handler);
 			},
 			async exec(command, args) {
 				calls.push([command, ...args]);
-				if (args[0] === "set-option")
+				if (args[0] === "show-options")
 					return {
-						code: setCodes?.[writeIndex++] ?? setCode,
-						stdout: "",
+						code: 0,
+						stdout:
+							server.state === undefined
+								? ""
+								: `@tmux-agents-status-state-%42 ${server.state}\n`,
 						stderr: "",
 					};
+				if (args[0] === "set-option") {
+					const code =
+						args[1] === "-su" ? 0 : (setCodes?.[writeIndex++] ?? setCode);
+					if (code === 0) {
+						for (let index = 0; index < args.length; ) {
+							if (args[index] === ";") {
+								index += 1;
+								continue;
+							}
+							index += 1;
+							const flag = args[index++];
+							const option = args[index++];
+							const target = option.includes("-state-") ? "state" : "ack";
+							if (flag === "-su") server[target] = undefined;
+							else server[target] = args[index++];
+						}
+					}
+					return { code, stdout: "", stderr: "" };
+				}
 				if (args[0] === "list-clients")
 					return {
 						code: listCode,
@@ -49,6 +73,11 @@ function fakePi({
 	};
 }
 
+async function initialize(instance, mode = tui) {
+	await instance.handlers.get("session_start")({ reason: "startup" }, mode);
+	instance.calls.length = 0;
+}
+
 const tui = { mode: "tui" };
 const assistant = (stopReason) => ({
 	message: { role: "assistant", stopReason },
@@ -65,14 +94,27 @@ try {
 	extension(lifecycle.api);
 	assert.deepEqual(
 		[...lifecycle.handlers.keys()],
-		["agent_start", "message_end", "agent_settled"],
+		[
+			"session_start",
+			"session_shutdown",
+			"agent_start",
+			"message_end",
+			"agent_settled",
+		],
 	);
-	assert.deepEqual(lifecycle.calls, [], "startup must not publish pane state");
+	assert.deepEqual(lifecycle.calls, [], "factory must not publish pane state");
+	await initialize(lifecycle);
 
 	await lifecycle.handlers.get("agent_start")({}, tui);
-	assert.equal(lifecycle.calls.length, 4);
-	const [runningWrite, runningClients, firstRefresh, secondRefresh] =
-		lifecycle.calls;
+	assert.equal(lifecycle.calls.length, 5);
+	const [
+		runningRead,
+		runningWrite,
+		runningClients,
+		firstRefresh,
+		secondRefresh,
+	] = lifecycle.calls;
+	assert.deepEqual(runningRead, ["tmux", "show-options", "-s"]);
 	assert.deepEqual(runningWrite.slice(0, 4), [
 		"tmux",
 		"set-option",
@@ -117,16 +159,18 @@ try {
 	await lifecycle.handlers.get("message_end")(assistant("error"), tui);
 	await lifecycle.handlers.get("agent_start")({}, tui);
 	await lifecycle.handlers.get("message_end")(assistant("stop"), tui);
-	assert.equal(lifecycle.calls.length, 4);
+	assert.equal(lifecycle.calls.length, 6);
 	await lifecycle.handlers.get("agent_settled")({}, tui);
-	assert.equal(lifecycle.calls.length, 9);
+	assert.equal(lifecycle.calls.length, 12);
 	const [
+		alertOwnershipRead,
 		alertClients,
 		paneWindowQuery,
 		completedWrite,
 		thirdRefresh,
 		fourthRefresh,
-	] = lifecycle.calls.slice(4);
+	] = lifecycle.calls.slice(6);
+	assert.deepEqual(alertOwnershipRead, runningRead);
 	assert.deepEqual(alertClients, runningClients);
 	assert.deepEqual(paneWindowQuery, [
 		"tmux",
@@ -153,13 +197,16 @@ try {
 	await lifecycle.handlers.get("agent_settled")({}, tui);
 	assert.equal(
 		lifecycle.calls.length,
-		9,
+		12,
 		"repeating a terminal state must not re-arm it",
 	);
 
 	await lifecycle.handlers.get("agent_start")({}, tui);
-	assert.match(lifecycle.calls[9][4], /\|running\|-$/);
-	assert.deepEqual(lifecycle.calls[9].slice(5), runningWrite.slice(5));
+	const nextRunningWrite = lifecycle.calls.findLast(
+		(call) => call[1] === "set-option",
+	);
+	assert.match(nextRunningWrite[4], /\|running\|-$/);
+	assert.deepEqual(nextRunningWrite.slice(5), runningWrite.slice(5));
 	await lifecycle.handlers.get("message_end")(assistant("aborted"), tui);
 	await lifecycle.handlers.get("agent_settled")({}, tui);
 	const failedWrite = lifecycle.calls.findLast(
@@ -207,6 +254,7 @@ try {
 
 	const invisible = fakePi({ clients: "client|@8\n" });
 	extension(invisible.api);
+	await initialize(invisible);
 	await invisible.handlers.get("agent_start")({}, tui);
 	await invisible.handlers.get("message_end")(assistant("stop"), tui);
 	await invisible.handlers.get("agent_settled")({}, tui);
@@ -221,6 +269,7 @@ try {
 
 	const printMode = fakePi();
 	extension(printMode.api);
+	await initialize(printMode, { mode: "print" });
 	await printMode.handlers.get("agent_start")({}, { mode: "print" });
 	await printMode.handlers.get("message_end")(assistant("stop"), {
 		mode: "print",
@@ -234,10 +283,11 @@ try {
 
 	const failedWritePi = fakePi({ setCodes: [1, 0] });
 	extension(failedWritePi.api);
+	await initialize(failedWritePi);
 	await failedWritePi.handlers.get("agent_start")({}, tui);
 	assert.equal(
 		failedWritePi.calls.length,
-		1,
+		2,
 		"refresh must wait for successful persistence",
 	);
 	await failedWritePi.handlers.get("agent_start")({}, tui);
@@ -253,6 +303,7 @@ try {
 
 	const failedAlertPi = fakePi({ setCodes: [0, 1, 0] });
 	extension(failedAlertPi.api);
+	await initialize(failedAlertPi);
 	await failedAlertPi.handlers.get("agent_start")({}, tui);
 	await failedAlertPi.handlers.get("message_end")(assistant("stop"), tui);
 	await failedAlertPi.handlers.get("agent_settled")({}, tui);
@@ -280,12 +331,13 @@ try {
 	);
 	assert.equal(
 		failedAlertPi.calls.length,
-		failedAlertCalls + 5,
+		failedAlertCalls + 6,
 		"refresh must happen only after the successful terminal retry",
 	);
 
 	const retryStartPi = fakePi();
 	extension(retryStartPi.api);
+	await initialize(retryStartPi);
 	await retryStartPi.handlers.get("agent_start")({}, tui);
 	await retryStartPi.handlers.get("message_end")(assistant("error"), tui);
 	await retryStartPi.handlers.get("agent_start")({}, tui);
@@ -300,6 +352,7 @@ try {
 
 	const abandonedAlertPi = fakePi({ setCodes: [0, 1] });
 	extension(abandonedAlertPi.api);
+	await initialize(abandonedAlertPi);
 	await abandonedAlertPi.handlers.get("agent_start")({}, tui);
 	await abandonedAlertPi.handlers.get("message_end")(assistant("stop"), tui);
 	await abandonedAlertPi.handlers.get("agent_settled")({}, tui);

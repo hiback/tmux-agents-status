@@ -54,7 +54,11 @@ tas_read_state() {
 
 	tas_owner=${tas_record#v1|}
 	tas_owner=${tas_owner%%|*}
-	kill -0 "$tas_owner" 2>/dev/null || return 1
+	if kill -0 "$tas_owner" 2>/dev/null; then
+		tas_live=true
+	else
+		tas_live=false
+	fi
 
 	tas_fields=${tas_record#*|}
 	tas_fields=${tas_fields#*|}
@@ -63,11 +67,13 @@ tas_read_state() {
 	tas_generation=${tas_fields#*|}
 	case $tas_state in
 	running)
+		[ "$tas_live" = true ] || return 1
 		_tas_glyph=${tas_running_glyph-}
 		_tas_style=${tas_running_style-}
 		tas_unread=false
 		;;
 	waiting)
+		[ "$tas_live" = true ] || return 1
 		_tas_glyph=${tas_waiting_glyph-}
 		_tas_style=${tas_waiting_style-}
 		tas_unread=true
@@ -96,6 +102,7 @@ tas_read_state() {
 			tas_unread=false
 		fi
 	fi
+	[ "$tas_live" = true ] || [ "$tas_unread" = true ]
 }
 
 tas_present_glyph() {
