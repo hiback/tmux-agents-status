@@ -1,0 +1,39 @@
+#!/bin/sh
+set -u
+
+empty() {
+	printf '\n'
+	exit 0
+}
+
+[ "$#" -eq 3 ] || empty
+session=$1
+window=$2
+active_pane=$3
+printf '%s\n' "$session" | grep -Eq '^\$[0-9]+$' || empty
+printf '%s\n' "$window" | grep -Eq '^@[0-9]+$' || empty
+printf '%s\n' "$active_pane" | grep -Eq '^%[0-9]+$' || empty
+
+glyph=$(tmux show-option -gqv @tmux-agents-status-running-glyph) || empty
+[ -n "$glyph" ] || empty
+style=$(tmux show-option -gqv @tmux-agents-status-running-style) || empty
+escaped_glyph=$(printf '%s' "$glyph" | sed 's/#/##/g') || empty
+panes=$(tmux list-panes -t "$session:$window" -F '#{pane_index}|#{pane_id}') || empty
+
+printf '%s\n' "$panes" | sort -t '|' -k1,1n -k2,2 | while IFS='|' read -r _index pane; do
+	record=$(tmux show-option -sqv "@tmux-agents-status-state-$pane") || continue
+	printf '%s\n' "$record" | grep -Eq '^v1\|[1-9][0-9]*\|[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}\|running\|-$' || continue
+	owner=${record#v1|}
+	owner=${owner%%|*}
+	kill -0 "$owner" 2>/dev/null || continue
+
+	if [ -n "$style" ]; then
+		printf '#[%s]%s#[default]' "$style" "$escaped_glyph"
+	else
+		printf '%s' "$escaped_glyph"
+	fi
+done | {
+	IFS= read -r output || :
+	[ -z "${output-}" ] || printf ' %s' "$output"
+	printf '\n'
+}

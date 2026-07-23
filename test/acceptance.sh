@@ -30,6 +30,8 @@ option() {
 	tmux_test show-option -gqv "$1"
 }
 
+node "$root/test/extension-running.mjs"
+
 tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test run-shell "$root/tmux-agents-status.tmux"
 
@@ -82,6 +84,44 @@ assert_equal '' "$(option @tmux-agents-status-failed-glyph)" 'empty failed glyph
 assert_equal 'fg=magenta' "$(option @tmux-agents-status-failed-style)" 'failed style override is preserved'
 assert_equal 'underscore' "$(option @tmux-agents-status-unread-style)" 'unread style override is preserved'
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is refreshed on every load'
+
+# Current-window rendering reads only valid live running records in the supplied window.
+set -- $(tmux_test display-message -p -t acceptance: '#{session_id} #{window_id} #{pane_id}')
+session=$1
+window=$2
+active_pane=$3
+second_pane=$(tmux_test split-window -d -t "$session:$window" -P -F '#{pane_id}')
+third_pane=$(tmux_test split-window -d -t "$session:$window" -P -F '#{pane_id}')
+set -- $(tmux_test new-window -d -t "$session:" -P -F '#{window_id} #{pane_id}')
+other_window=$1
+other_pane=$2
+incarnation=11111111-1111-4111-8111-111111111111
+
+for pane in "$active_pane" "$third_pane" "$other_pane"; do
+	tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|running|-"
+done
+tmux_test set-option -s "@tmux-agents-status-state-$second_pane" 'v1|0|not-an-incarnation|running|-'
+
+server_tmux="$(tmux_test display-message -p '#{socket_path}'),$$,0"
+render_window() {
+	TMUX="$server_tmux" "$root/scripts/render-window" "$@"
+}
+
+assert_equal ' #[fg=white]R#[default]#[fg=white]R#[default]' "$(render_window "$session" "$window" "$active_pane")" 'running panes render once in their current window'
+assert_equal ' #[fg=white]R#[default]' "$(render_window "$session" "$other_window" "$other_pane")" 'a running pane renders in its own window only'
+
+tmux_test set-option -g @tmux-agents-status-running-glyph '#R'
+assert_equal ' #[fg=white]##R#[default]#[fg=white]##R#[default]' "$(render_window "$session" "$window" "$active_pane")" 'configured glyph format metacharacters are escaped'
+tmux_test set-option -g @tmux-agents-status-running-style ''
+assert_equal ' ##R##R' "$(render_window "$session" "$window" "$active_pane")" 'unstyled running glyphs do not emit style resets'
+tmux_test set-option -g @tmux-agents-status-running-glyph ''
+assert_equal '' "$(render_window "$session" "$window" "$active_pane")" 'an empty running glyph hides running state'
+
+tmux_test set-option -g @tmux-agents-status-running-glyph 'R'
+tmux_test set-option -g @tmux-agents-status-running-style 'fg=white'
+tmux_test set-option -su "@tmux-agents-status-state-$active_pane"
+tmux_test set-option -su "@tmux-agents-status-state-$third_pane"
+assert_equal '' "$(render_window "$session" "$window" "$active_pane")" 'a window without valid records emits an empty fragment'
 
 cat >"$tmp/tmux" <<'EOF'
 #!/bin/sh
