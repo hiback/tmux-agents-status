@@ -156,6 +156,161 @@ tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarna
 "
 assert_equal ' #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'an otherwise-valid record ending in a newline is omitted without hiding valid siblings'
 
+# The other-session renderer excludes panes linked into the current session,
+# attributes other linked panes once, and keeps stable topology ordering.
+set -- $(tmux_test new-session -d -s 'current-linked#name' -P -F '#{session_id} #{window_id} #{pane_id}')
+current_linked_session=$1
+current_linked_window=$2
+current_linked_pane=$3
+tmux_test link-window -s "$current_linked_session:$current_linked_window" -t "$session:"
+
+set -- $(tmux_test new-session -d -s 'first#name' -P -F '#{session_id} #{window_id} #{pane_id}')
+first_session=$1
+first_window=$2
+first_running=$3
+first_waiting=$(tmux_test split-window -d -t "$first_session:$first_window" -P -F '#{pane_id}')
+first_malformed=$(tmux_test split-window -d -t "$first_session:$first_window" -P -F '#{pane_id}')
+
+set -- $(tmux_test new-session -d -s 'low#|name' -P -F '#{session_id} #{window_id} #{pane_id}')
+low_session=$1
+low_window=$2
+low_completed=$3
+low_failed=$(tmux_test split-window -d -t "$low_session:$low_window" -P -F '#{pane_id}')
+
+set -- $(tmux_test new-session -d -s 'higher#name' -P -F '#{session_id} #{window_id} #{pane_id}')
+higher_session=$1
+higher_running=$3
+tmux_test link-window -s "$low_session:$low_window" -t "$higher_session:"
+
+for pane in "$current_linked_pane" "$first_running" "$higher_running"; do
+	tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|running|-"
+done
+tmux_test set-option -s "@tmux-agents-status-state-$first_waiting" "v1|$$|$incarnation|waiting|$waiting_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$first_malformed" 'v1|0|bad|running|-'
+tmux_test set-option -s "@tmux-agents-status-state-$low_completed" "v1|$$|$incarnation|completed|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$low_failed" "v1|$$|$incarnation|failed|$failed_generation"
+tmux_test set-option -su "@tmux-agents-status-ack-$first_waiting"
+tmux_test set-option -su "@tmux-agents-status-ack-$low_completed"
+tmux_test set-option -su "@tmux-agents-status-ack-$low_failed"
+tmux_test set-option -g @tmux-agents-status-running-glyph '#R'
+tmux_test set-option -g @tmux-agents-status-running-style 'fg=white'
+tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W#'
+tmux_test set-option -g @tmux-agents-status-waiting-style 'fg=yellow'
+tmux_test set-option -g @tmux-agents-status-completed-glyph 'CC'
+tmux_test set-option -g @tmux-agents-status-completed-style 'fg=blue'
+tmux_test set-option -g @tmux-agents-status-failed-glyph 'F#'
+tmux_test set-option -g @tmux-agents-status-failed-style 'fg=red'
+tmux_test set-option -g @tmux-agents-status-unread-style 'underscore'
+
+server_tmux="$(tmux_test display-message -p '#{socket_path}'),$$,0"
+render_other() {
+	TMUX="$server_tmux" "$root/scripts/render-other-sessions" "$@"
+}
+assert_other() {
+	render_other "$session" >"$tmp/other-output"
+	assert_equal '1' "$(wc -l <"$tmp/other-output" | tr -d ' ')" "$2 prints exactly one output line"
+	IFS= read -r actual <"$tmp/other-output" || :
+	assert_equal "$1" "${actual-}" "$2"
+}
+
+assert_other '#[fg=white]##R#[default]2 first##name:#[fg=yellow,underscore]W###[default] low##|name:#[fg=blue,underscore]CC#[default]#[fg=red,underscore]F###[default] ' 'other sessions summarize running work and ordered unread alerts'
+
+assert_empty_renderer() {
+	"$@" >"$tmp/renderer-output"
+	assert_equal '1' "$(wc -l <"$tmp/renderer-output" | tr -d ' ')" "$1 rejects multiline configuration with exactly one output line"
+	IFS= read -r actual <"$tmp/renderer-output" || :
+	assert_equal '' "${actual-}" "$1 rejects multiline configuration without sibling or output injection"
+}
+
+tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W
+injected'
+assert_empty_renderer render_window "$session" "$window" "$active_pane"
+assert_empty_renderer render_other "$session"
+tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W#'
+tmux_test set-option -g @tmux-agents-status-failed-style 'fg=red
+'
+assert_empty_renderer render_window "$session" "$window" "$active_pane"
+assert_empty_renderer render_other "$session"
+tmux_test set-option -g @tmux-agents-status-failed-style 'fg=red'
+
+for pane_generation in \
+	"$first_waiting:$waiting_generation" \
+	"$low_completed:$completed_generation" \
+	"$low_failed:$failed_generation"; do
+	pane=${pane_generation%%:*}
+	generation=${pane_generation#*:}
+	tmux_test set-option -s "@tmux-agents-status-ack-$pane" "$generation"
+done
+assert_other '#[fg=white]##R#[default]2 ' 'acknowledged groups collapse while background running remains'
+
+tmux_test set-option -g @tmux-agents-status-running-glyph ''
+assert_other '' 'an empty running glyph hides its total and leaves an empty summary'
+
+# tmux canonicalizes literal newlines in session names to visible \\n text.
+embedded_name='embedded
+name'
+trailing_name='trailing
+'
+embedded_session=$(tmux_test new-session -d -s "$embedded_name" -P -F '#{session_id}')
+trailing_session=$(tmux_test new-session -d -s "$trailing_name" -P -F '#{session_id}')
+assert_equal 'embedded\nname' "$(tmux_test display-message -p -t "$embedded_session" '#{session_name}')" 'tmux canonicalizes an embedded newline in a session name'
+assert_equal 'trailing\n' "$(tmux_test display-message -p -t "$trailing_session" '#{session_name}')" 'tmux canonicalizes a trailing newline in a session name'
+
+# Fake only tmux's executable boundary to exercise raw malformed query output and
+# pane-ID ordering that real topology cannot make tie on all earlier keys.
+mkdir "$tmp/fake-render"
+cat >"$tmp/fake-render/tmux" <<'EOF'
+#!/bin/sh
+case "$1:$2" in
+show-option:-gqv)
+	[ "${FAKE_FAIL-}" = option ] && exit 1
+	case $3 in
+	*@tmux-agents-status-running-glyph) printf 'R\n' ;;
+	*@tmux-agents-status-waiting-glyph) printf 'W\n' ;;
+	*@tmux-agents-status-completed-glyph) printf 'C\n' ;;
+	*@tmux-agents-status-failed-glyph) printf 'F\n' ;;
+	*) printf '\n' ;;
+	esac
+	;;
+show-option:-sqv)
+	case $3 in
+	*@tmux-agents-status-state-%9) printf 'v1|%s|11111111-1111-4111-8111-111111111111|failed|44444444-4444-4444-8444-444444444444\n' "$FAKE_OWNER" ;;
+	*@tmux-agents-status-state-%10) printf 'v1|%s|11111111-1111-4111-8111-111111111111|completed|33333333-3333-4333-8333-333333333333\n' "$FAKE_OWNER" ;;
+	*) exit 1 ;;
+	esac
+	;;
+list-panes:*)
+	[ "${FAKE_FAIL-}" = topology ] && exit 1
+	printf '$1|0|0|%%10\n$1|0|0|%%9\n'
+	;;
+display-message:-p)
+	[ "${FAKE_FAIL-}" = name ] && exit 1
+	case ${FAKE_NAME_KIND-good} in
+	good) printf '$1|ordered\n' ;;
+	embedded) printf '$1|bad\ninjected\n' ;;
+	trailing) printf '$1|bad\n\n' ;;
+	esac
+	;;
+*) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/fake-render/tmux"
+
+assert_fake_other() {
+	PATH="$tmp/fake-render:$PATH" FAKE_OWNER=$$ FAKE_NAME_KIND=$1 FAKE_FAIL=$2 \
+		"$root/scripts/render-other-sessions" '$0' >"$tmp/fake-render-output"
+	assert_equal '1' "$(wc -l <"$tmp/fake-render-output" | tr -d ' ')" "$4 prints exactly one output line"
+	IFS= read -r actual <"$tmp/fake-render-output" || :
+	assert_equal "$3" "${actual-}" "$4"
+}
+
+assert_fake_other good '' 'ordered:FC ' 'numeric pane-ID tie-breaking orders alerts'
+assert_fake_other embedded '' '' 'an embedded newline from the session-name query fails closed'
+assert_fake_other trailing '' '' 'a trailing newline from the session-name query fails closed'
+assert_fake_other good name '' 'a required session-name query failure fails closed'
+assert_fake_other good option '' 'a required global-option query failure fails closed'
+assert_fake_other good topology '' 'a required topology query failure fails closed'
+
 cat >"$tmp/tmux" <<'EOF'
 #!/bin/sh
 if [ "$1" = 'display-message' ]; then
