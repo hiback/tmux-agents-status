@@ -14,19 +14,56 @@ printf '%s\n' "$session" | grep -Eq '^\$[0-9]+$' || empty
 printf '%s\n' "$window" | grep -Eq '^@[0-9]+$' || empty
 printf '%s\n' "$active_pane" | grep -Eq '^%[0-9]+$' || empty
 
-glyph=$(tmux show-option -gqv @tmux-agents-status-running-glyph) || empty
-[ -n "$glyph" ] || empty
-style=$(tmux show-option -gqv @tmux-agents-status-running-style) || empty
-escaped_glyph=$(printf '%s' "$glyph" | sed 's/#/##/g') || empty
+running_glyph=$(tmux show-option -gqv @tmux-agents-status-running-glyph) || empty
+running_style=$(tmux show-option -gqv @tmux-agents-status-running-style) || empty
+waiting_glyph=$(tmux show-option -gqv @tmux-agents-status-waiting-glyph) || empty
+waiting_style=$(tmux show-option -gqv @tmux-agents-status-waiting-style) || empty
+completed_glyph=$(tmux show-option -gqv @tmux-agents-status-completed-glyph) || empty
+completed_style=$(tmux show-option -gqv @tmux-agents-status-completed-style) || empty
+failed_glyph=$(tmux show-option -gqv @tmux-agents-status-failed-glyph) || empty
+failed_style=$(tmux show-option -gqv @tmux-agents-status-failed-style) || empty
+unread_style=$(tmux show-option -gqv @tmux-agents-status-unread-style) || empty
 panes=$(tmux list-panes -t "$session:$window" -F '#{pane_index}|#{pane_id}') || empty
+uuid='[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}'
+newline='
+'
 
 printf '%s\n' "$panes" | sort -t '|' -k1,1n -k2,2 | while IFS='|' read -r _index pane; do
-	record=$(tmux show-option -sqv "@tmux-agents-status-state-$pane") || continue
-	printf '%s\n' "$record" | grep -Eq '^v1\|[1-9][0-9]*\|[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}\|running\|-$' || continue
+	record=$(tmux show-option -sqv "@tmux-agents-status-state-$pane" && printf x) || continue
+	record=${record%x}
+	record=${record%"$newline"}
+	case $record in
+	*'
+'*) continue ;;
+	esac
+	printf '%s\n' "$record" | grep -Eq "^v1\\|[1-9][0-9]*\\|$uuid\\|(running\\|-|(waiting|completed|failed)\\|$uuid)$" || continue
 	owner=${record#v1|}
 	owner=${owner%%|*}
 	kill -0 "$owner" 2>/dev/null || continue
 
+	fields=${record#*|}
+	fields=${fields#*|}
+	fields=${fields#*|}
+	state=${fields%%|*}
+	generation=${fields#*|}
+	case $state in
+		running) glyph=$running_glyph; style=$running_style; unread=false ;;
+		waiting) glyph=$waiting_glyph; style=$waiting_style; unread=true ;;
+		completed) glyph=$completed_glyph; style=$completed_style; unread=true ;;
+		failed) glyph=$failed_glyph; style=$failed_style; unread=true ;;
+	esac
+	[ -n "$glyph" ] || continue
+
+	if [ "$unread" = true ]; then
+		ack=$(tmux show-option -sqv "@tmux-agents-status-ack-$pane") || ack=
+		if printf '%s\n' "$ack" | grep -Eq "^$uuid$" && [ "$ack" = "$generation" ]; then
+			unread=false
+		fi
+	fi
+	if [ "$unread" = true ] && [ -n "$unread_style" ]; then
+		style=${style:+$style,}$unread_style
+	fi
+	escaped_glyph=$(printf '%s' "$glyph" | sed 's/#/##/g') || continue
 	if [ -n "$style" ]; then
 		printf '#[%s]%s#[default]' "$style" "$escaped_glyph"
 	else

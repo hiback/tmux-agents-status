@@ -123,6 +123,39 @@ tmux_test set-option -su "@tmux-agents-status-state-$active_pane"
 tmux_test set-option -su "@tmux-agents-status-state-$third_pane"
 assert_equal '' "$(render_window "$session" "$window" "$active_pane")" 'a window without valid records emits an empty fragment'
 
+# Live alerts render their actual state; acknowledgement changes only unread emphasis.
+waiting_generation=22222222-2222-4222-8222-222222222222
+completed_generation=33333333-3333-4333-8333-333333333333
+failed_generation=44444444-4444-4444-8444-444444444444
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|$waiting_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$second_pane" "v1|$$|$incarnation|completed|$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-ack-$second_pane" "$completed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$third_pane" "v1|$$|$incarnation|failed|$failed_generation"
+tmux_test set-option -s "@tmux-agents-status-ack-$third_pane" "$completed_generation"
+tmux_test set-option -g @tmux-agents-status-failed-glyph '!!#'
+
+assert_equal ' #[fg=black,underscore]W#[default]#[fg=magenta,underscore]!!###[default]#[fg=blue]C#[default]' "$(render_window "$session" "$window" "$active_pane")" 'live outcomes render configured state and generation-based unread styles'
+
+tmux_test set-option -s "@tmux-agents-status-ack-$active_pane" "$waiting_generation"
+assert_equal ' #[fg=black]W#[default]#[fg=magenta,underscore]!!###[default]#[fg=blue]C#[default]' "$(render_window "$session" "$window" "$active_pane")" 'acknowledgement preserves live state and removes only unread emphasis'
+
+tmux_test set-option -g @tmux-agents-status-waiting-glyph ''
+tmux_test set-option -g @tmux-agents-status-completed-style ''
+tmux_test set-option -g @tmux-agents-status-failed-style ''
+assert_equal ' #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'empty glyphs hide one state and empty styles emit only necessary markup'
+
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|-"
+assert_equal ' #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'state-inconsistent generations are omitted without hiding valid siblings'
+
+tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W'
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|$waiting_generation
+malformed"
+assert_equal ' #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'a valid-prefix multiline record is omitted without hiding valid siblings'
+
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|$waiting_generation
+"
+assert_equal ' #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'an otherwise-valid record ending in a newline is omitted without hiding valid siblings'
+
 cat >"$tmp/tmux" <<'EOF'
 #!/bin/sh
 if [ "$1" = 'display-message' ]; then
