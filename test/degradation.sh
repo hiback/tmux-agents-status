@@ -81,7 +81,7 @@ cat >"$tmp/bin/sed" <<'EOF'
 	printf 'raw-secret sed stderr\n' >&2
 	exit 1
 }
-exec /bin/sed "$@"
+exec /usr/bin/sed "$@"
 EOF
 chmod +x "$tmp/bin/sed"
 

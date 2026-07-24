@@ -165,4 +165,25 @@ while [ "$tries" -lt 20 ] && [ -z "$(server_option @tmux-agents-status-cleanup-o
 done
 assert_equal "$relocated_pane" "$(server_option @tmux-agents-status-cleanup-observed)" 'pane-exit hook resolves the current root when invoked'
 
+# tmux 3.0 reports a missing server option as success with empty output.
+mkdir "$tmp/fake-tmux-3.0"
+cat >"$tmp/fake-tmux-3.0/tmux" <<'EOF'
+#!/bin/sh
+case "$1:$2" in
+display-message:-p) printf '3.0\n' ;;
+show-option:-s|show-option:-sqv) : ;;
+*) printf '%s\n' "$*" >>"$FAKE_TMUX_LOG" ;;
+esac
+EOF
+chmod +x "$tmp/fake-tmux-3.0/tmux"
+: >"$tmp/tmux-3.0-calls"
+PATH="$tmp/fake-tmux-3.0:$PATH" FAKE_TMUX_LOG="$tmp/tmux-3.0-calls" "$root/tmux-agents-status.tmux"
+ack_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
+for hook in window-pane-changed session-window-changed client-session-changed; do
+	grep -Fq "set-hook -ag $hook $ack_command" "$tmp/tmux-3.0-calls" ||
+		fail "tmux 3.0 missing-option semantics install the $hook acknowledgement hook"
+done
+grep -Fq 'set-hook -ag pane-exited run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"' "$tmp/tmux-3.0-calls" ||
+	fail 'tmux 3.0 missing-option semantics install the pane-exited cleanup hook'
+
 printf 'ok - owner death derives failure and event cleanup removes stale records\n'

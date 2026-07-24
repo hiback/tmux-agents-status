@@ -41,6 +41,7 @@ node "$root/test/lifecycle.mjs"
 "$root/test/acknowledge.sh"
 "$root/test/death-cleanup.sh"
 "$root/test/degradation.sh"
+"$root/test/timing.sh"
 
 tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test set-hook -g window-pane-changed 'display-message user-hook'
@@ -397,15 +398,20 @@ assert_other '#[fg=white]##R#[default]2 ' 'acknowledged groups collapse while ba
 tmux_test set-option -g @tmux-agents-status-running-glyph ''
 assert_other '' 'an empty running glyph hides its total and leaves an empty summary'
 
-# tmux canonicalizes literal newlines in session names to visible \\n text.
+# Depending on version, tmux preserves, visibly escapes, or rejects newlines.
 embedded_name='embedded
 name'
 trailing_name='trailing
 '
-embedded_session=$(tmux_test new-session -d -s "$embedded_name" -P -F '#{session_id}')
-trailing_session=$(tmux_test new-session -d -s "$trailing_name" -P -F '#{session_id}')
-assert_equal 'embedded\nname' "$(tmux_test display-message -p -t "$embedded_session" '#{session_name}')" 'tmux canonicalizes an embedded newline in a session name'
-assert_equal 'trailing\n' "$(tmux_test display-message -p -t "$trailing_session" '#{session_name}')" 'tmux canonicalizes a trailing newline in a session name'
+if embedded_session=$(tmux_test new-session -d -s "$embedded_name" -P -F '#{session_id}' 2>/dev/null); then
+	trailing_session=$(tmux_test new-session -d -s "$trailing_name" -P -F '#{session_id}') || fail 'tmux handles embedded and trailing newlines consistently'
+	embedded_actual=$(tmux_test display-message -p -t "$embedded_session" '#{session_name}')
+	trailing_actual=$(tmux_test display-message -p -t "$trailing_session" '#{session_name}')
+	[ "$embedded_actual" = 'embedded\nname' ] || [ "$embedded_actual" = "$embedded_name" ] || fail 'tmux preserves or visibly escapes an embedded newline in a session name'
+	[ "$trailing_actual" = 'trailing\n' ] || [ "$trailing_actual" = trailing ] || fail 'tmux preserves or visibly escapes a trailing newline in a session name'
+elif tmux_test new-session -d -s "$trailing_name" >/dev/null 2>&1; then
+	fail 'tmux handles embedded and trailing newlines consistently'
+fi
 
 # Fake only tmux's executable boundary to exercise raw malformed query output and
 # pane-ID ordering that real topology cannot make tie on all earlier keys.
