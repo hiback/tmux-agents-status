@@ -127,9 +127,9 @@ assert_renderer() {
 	assert_equal "$expected_error" "$actual_error" "$label stderr"
 }
 
-assert_renderer ' F' '' 'window renderer isolates malformed and unknown sibling state' \
+assert_renderer '#[default] F' '' 'window renderer isolates malformed and unknown sibling state' \
 	"$root/scripts/render-window" "\$0" '@1' '%1'
-assert_renderer 'other:F ' '' 'other renderer isolates malformed and unknown sibling state' \
+assert_renderer '#[default]other:F ' '' 'other renderer isolates malformed and unknown sibling state' \
 	"$root/scripts/render-other-sessions" "\$0"
 generation=22222222-2222-4222-8222-222222222222
 incarnation=11111111-1111-4111-8111-111111111111
@@ -144,7 +144,7 @@ for invalid_record in \
 	"v1|$$|$incarnation|running|$generation" \
 	"v1|$$|$incarnation|failed|-" \
 	"v1|$$|$incarnation|failed|dead-$incarnation"; do
-	assert_renderer ' F' '' 'strict records omit one invalid sibling' \
+	assert_renderer '#[default] F' '' 'strict records omit one invalid sibling' \
 		env FAKE_BAD_RECORD="$invalid_record" "$root/scripts/render-window" "\$0" '@1' '%1'
 done
 assert_renderer '' 'tmux-agents-status: render-window: required query failed' 'window required option failure degrades safely' \

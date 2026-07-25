@@ -68,10 +68,10 @@ set -g window-status-current-format '#I:#W#{E:@tmux-agents-status-window}'
 Place the other-session fragment exactly once in `status-right`:
 
 ```tmux
-set -g status-right '#{E:@tmux-agents-status-other-sessions}#[fg=colour250]#S %H:%M'
+set -g status-right '#{E:@tmux-agents-status-other-sessions}#[default,fg=colour250]#S %H:%M'
 ```
 
-The `#[fg=colour250]` part is only an example of **generic style reapplication**, not a theme preset. Every styled plugin glyph ends with `#[default]`; reapply whatever `#[...]` style the following part of your theme needs. Keep the window fragment at the end because tmux 3.0 cannot restore an arbitrary preceding inline style.
+The `#[default,fg=colour250]` part is only an example of **generic style reapplication**, not a theme preset. Every nonempty plugin fragment starts from and returns to tmux's default style, so enclosing inline attributes do not change plugin content. Reapply whatever `#[...]` style the following part of your theme needs. Keep the window fragment at the end because tmux 3.0 cannot restore an arbitrary preceding inline style.
 
 ## Customize
 
@@ -101,7 +101,7 @@ set -g @tmux-agents-status-unread-style 'underscore'
 run-shell /home/alice/src/tmux-agents-status/tmux-agents-status.tmux
 ```
 
-An empty state style emits its glyph without that state style. If unread style is nonempty, an unread glyph still receives unread styling and a following `#[default]`. Glyphs must be one line, may occupy multiple display cells, and are never measured or truncated by the plugin; the enclosing tmux format owns available width. Literal `#` characters in glyphs and session names are escaped for tmux formats.
+State styles are applied relative to tmux's default style, not inherited from the enclosing format. An empty state style emits its glyph in that default style. If unread style is nonempty, an unread glyph still receives unread styling and a following `#[default]`. Glyphs must be one line, may occupy multiple display cells, and are never measured or truncated by the plugin; the enclosing tmux format owns available width. Literal `#` characters in glyphs and session names are escaped for tmux formats.
 
 ## What the status means
 

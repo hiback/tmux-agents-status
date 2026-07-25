@@ -62,11 +62,11 @@ tmux_test set-option -s "@tmux-agents-status-state-$pane" "$running"
 kill "$owner"
 wait "$owner" 2>/dev/null || :
 owner=
-assert_equal ' #[reverse]F#[default]' "$(render)" 'dead running derives an unread virtual failure'
+assert_equal '#[default] #[reverse]F#[default]' "$(render)" 'dead running derives an unread virtual failure'
 assert_equal "$running" "$(server_option "@tmux-agents-status-state-$pane")" 'virtual failure rendering leaves stored state unchanged'
 other_dead_pane=$(tmux_test new-session -d -s dead-other -P -F '#{pane_id}')
 tmux_test set-option -s "@tmux-agents-status-state-$other_dead_pane" "$running"
-assert_equal 'dead-other:#[reverse]F#[default] ' "$(TMUX="$server_tmux" "$root/scripts/render-other-sessions" "$session")" 'other-session rendering exposes the same virtual failure'
+assert_equal '#[default]dead-other:#[reverse]F#[default] ' "$(TMUX="$server_tmux" "$root/scripts/render-other-sessions" "$session")" 'other-session rendering exposes the same virtual failure'
 tmux_test set-option -s "@tmux-agents-status-ack-$other_dead_pane" "dead-$incarnation"
 assert_equal '' "$(TMUX="$server_tmux" "$root/scripts/render-other-sessions" "$session")" 'other-session rendering hides an acknowledged virtual failure'
 tmux_test set-option -s "@tmux-agents-status-ack-$pane" "dead-$incarnation"
@@ -75,22 +75,22 @@ assert_equal '' "$(render)" 'acknowledged virtual failure is hidden'
 waiting="v1|99999999|$incarnation|waiting|$completed_generation"
 tmux_test set-option -s "@tmux-agents-status-state-$pane" "$waiting"
 tmux_test set-option -su "@tmux-agents-status-ack-$pane"
-assert_equal ' #[reverse]F#[default]' "$(render)" 'dead waiting derives the same deterministic virtual failure'
+assert_equal '#[default] #[reverse]F#[default]' "$(render)" 'dead waiting derives the same deterministic virtual failure'
 
 completed="v1|99999999|$incarnation|completed|$completed_generation"
 tmux_test set-option -s "@tmux-agents-status-state-$pane" "$completed"
-assert_equal ' #[reverse]C#[default]' "$(render)" 'dead completed preserves its recorded terminal state and generation'
+assert_equal '#[default] #[reverse]C#[default]' "$(render)" 'dead completed preserves its recorded terminal state and generation'
 tmux_test set-option -s "@tmux-agents-status-ack-$pane" "$completed_generation"
 assert_equal '' "$(render)" 'acknowledged dead completed state is hidden'
 
 failed="v1|99999999|$incarnation|failed|$failed_generation"
 tmux_test set-option -s "@tmux-agents-status-state-$pane" "$failed"
 tmux_test set-option -su "@tmux-agents-status-ack-$pane"
-assert_equal ' #[reverse]F#[default]' "$(render)" 'dead failed preserves its recorded terminal state and generation'
+assert_equal '#[default] #[reverse]F#[default]' "$(render)" 'dead failed preserves its recorded terminal state and generation'
 
 tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|completed|$completed_generation"
 tmux_test set-option -s "@tmux-agents-status-ack-$pane" "$completed_generation"
-assert_equal ' C' "$(render)" 'acknowledgement preserves a live terminal state'
+assert_equal '#[default] C' "$(render)" 'acknowledgement preserves a live terminal state'
 
 cleanup_pane=$(tmux_test split-window -d -P -F '#{pane_id}')
 tmux_test set-option -s "@tmux-agents-status-state-$cleanup_pane" "v1|$$|$incarnation|completed|$completed_generation"

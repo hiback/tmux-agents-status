@@ -116,7 +116,7 @@ if [ -n "$groups" ]; then
 	body=${body}${body:+ }$groups
 fi
 if [ -n "$body" ]; then
-	printf '%s \n' "$body"
+	printf '#[default]%s \n' "$body"
 else
 	printf '\n'
 fi

@@ -203,7 +203,7 @@ try {
 			encoding: "utf8",
 			env: process.env,
 		});
-	assert.equal(render(), " #[reverse]F#[default]\n");
+	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
 	tmux("set-option", "-s", `@tmux-agents-status-ack-${pane}`, deadGeneration);
 	assert.equal(render(), "\n");
 } finally {

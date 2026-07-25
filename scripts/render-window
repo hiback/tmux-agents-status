@@ -53,5 +53,5 @@ case $? in
 2) empty 'required query failed' ;;
 *) empty 'render failed' ;;
 esac
-[ -z "$output" ] || printf ' %s' "$output"
+[ -z "$output" ] || printf '#[default] %s' "$output"
 printf '\n'
