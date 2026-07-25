@@ -5,8 +5,15 @@ A tmux status plugin and an independent [Pi](https://github.com/badlogic/pi-mono
 ## Requirements
 
 - tmux 3.0 or newer on Linux or macOS
-- Pi 0.81.1 or newer, in TUI mode, for the companion
+- Pi 0.80.4 or newer, in TUI mode, for the companion
 - `/bin/sh` and POSIX utilities
+
+The companion uses Pi's single-file TypeScript extension loader, `pi.exec`,
+`ctx.mode`, and the `session_start`, `session_shutdown`, `agent_start`,
+`message_end`, and `agent_settled` events. The limiting API is
+[`agent_settled`, introduced in Pi 0.80.4](https://github.com/earendil-works/pi/releases/tag/v0.80.4);
+0.81.1 is the oldest version in the verification table below, not the API
+minimum.
 
 The tmux plugin and Pi companion are installed and upgraded independently. Neither installs, upgrades, or configures the other.
 
