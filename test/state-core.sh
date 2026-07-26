@@ -122,10 +122,24 @@ assert_equal "$interrupted" "$(option "$state_option")" 'events from a released 
 
 replacement=pi:44444444-4444-4444-8444-444444444444
 replacement_turn=t:55555555-5555-4555-8555-555555555555
-tmux_test set-option -s "$ack_option" "$interrupted_generation"
+core 2 claim "$owner" "pid:$$"
+core 2 start "$owner" "$old_turn"
+core 2 wait-open "$owner" "$old_turn" stale-request
+replaced_waiting=$(option "$state_option")
+replaced_generation=$(printf '%s\n' "$replaced_waiting" | awk -F '|' '{ print $6 }')
+tmux_test set-option -s "$ack_option" "$replaced_generation"
 core 2 claim "$replacement" -
-assert_equal "v2|$replacement|-|-|none|-|-|-" "$(option "$state_option")" 'a claim atomically replaces previous ownership and state'
+replacement_none="v2|$replacement|-|-|none|-|-|-"
+assert_equal "$replacement_none" "$(option "$state_option")" 'a claim atomically replaces active ownership, state, and pending work without publishing failure'
 assert_equal '' "$(option "$ack_option")" 'replacement clears previous acknowledgement'
+core 2 start "$owner" "$old_turn"
+core 2 wait-open "$owner" "$old_turn" stale-request
+core 2 wait-close "$owner" "$old_turn" stale-request
+core 2 finish "$owner" "$old_turn" failed
+core 2 dismiss-terminal "$owner"
+core 2 release "$owner" interrupted
+assert_equal "$replacement_none" "$(option "$state_option")" 'all delayed events from the replaced owner are ignored'
+assert_equal '' "$(option "$ack_option")" 'stale owner delivery cannot recreate acknowledgement'
 core 2 finish "$replacement" "$replacement_turn" completed
 terminal_without_start=$(option "$state_option")
 terminal_without_start_generation=$(printf '%s\n' "$terminal_without_start" | awk -F '|' '{ print $6 }')
@@ -147,6 +161,42 @@ legacy_repaired=$(option "$state_option")
 core 2 start 'owner with spaces' "$turn"
 core 9 start "$owner" "$turn"
 assert_equal "$legacy_repaired" "$(option "$state_option")" 'malformed input and future protocols cannot mutate state'
+
+refresh_owner=pi:66666666-6666-4666-8666-666666666666
+refresh_turn=t:77777777-7777-4777-8777-777777777777
+core 2 claim "$refresh_owner" "pid:$$"
+mkdir "$tmp/refresh-failing-bin"
+cat >"$tmp/refresh-failing-bin/tmux" <<'EOF'
+#!/bin/sh
+case $1:$2 in
+list-clients:-F)
+	case $3 in
+	'#{client_name}') printf 'broken-client\n' ;;
+	'#{pane_id}') : ;;
+	esac
+	;;
+refresh-client:-S)
+	printf '<refresh>\n' >>"$FAKE_REFRESH_LOG"
+	exit 1
+	;;
+*) exec /usr/bin/tmux "$@" ;;
+esac
+EOF
+chmod +x "$tmp/refresh-failing-bin/tmux"
+: >"$tmp/refresh-log"
+PATH="$tmp/refresh-failing-bin:$PATH" FAKE_REFRESH_LOG="$tmp/refresh-log" \
+	TMUX="$server_tmux" TMUX_PANE="$pane" "$root/scripts/state-core" \
+	2 start "$refresh_owner" "$refresh_turn" >"$tmp/refresh-out" 2>"$tmp/refresh-error"
+assert_equal "v2|$refresh_owner|pid:$$|$refresh_turn|running|-|-|-" "$(option "$state_option")" 'refresh failure never rolls back a persisted lifecycle mutation'
+assert_equal '' "$(cat "$tmp/refresh-out")" 'refresh failure exposes no stdout'
+assert_equal 'tmux-agents-status: state-core: refresh failed' "$(cat "$tmp/refresh-error")" 'refresh failure has one bounded content-free diagnostic'
+assert_equal '1' "$(wc -l <"$tmp/refresh-log" | tr -d ' ')" 'an accepted visible mutation attempts one refresh'
+: >"$tmp/refresh-log"
+PATH="$tmp/refresh-failing-bin:$PATH" FAKE_REFRESH_LOG="$tmp/refresh-log" \
+	TMUX="$server_tmux" TMUX_PANE="$pane" "$root/scripts/state-core" \
+	2 finish "$owner" "$refresh_turn" failed >"$tmp/rejected-out" 2>"$tmp/rejected-error"
+assert_equal '' "$(cat "$tmp/rejected-error")" 'a rejected stale-owner mutation remains silent'
+assert_equal '0' "$(wc -l <"$tmp/refresh-log" | tr -d ' ')" 'a rejected stale-owner mutation does not refresh clients'
 
 mkdir "$tmp/failing-bin"
 cat >"$tmp/failing-bin/tmux" <<'EOF'

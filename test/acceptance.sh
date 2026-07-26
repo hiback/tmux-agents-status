@@ -40,9 +40,11 @@ node "$root/test/pi-adapter.mjs"
 node "$root/test/lifecycle.mjs"
 "$root/test/state-core.sh"
 "$root/test/acknowledge.sh"
+"$root/test/client-attachment.sh"
 "$root/test/death-cleanup.sh"
 "$root/test/degradation.sh"
 "$root/test/timing.sh"
+"$root/test/uninstall.sh"
 
 tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test set-hook -g window-pane-changed 'display-message user-hook'

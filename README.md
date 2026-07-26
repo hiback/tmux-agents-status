@@ -168,6 +168,18 @@ Pi reports exact `running` from accepted `agent_start` through `agent_settled`. 
 
 Adapters and the core exchange protocol major 2 lifecycle identifiers only. They do not inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content. v1, future-version, malformed, and oversized tmux records are ignored.
 
+## Uninstall the tmux core
+
+Run the core cleanup while the checkout still exists:
+
+```sh
+~/.tmux/plugins/tmux-agents-status/scripts/uninstall
+```
+
+The command removes only live tmux state owned by this plugin: its hook entries and markers, unchanged defaults, pane records and acknowledgements, protocol metadata, and root metadata. It is safe to run repeatedly. It does not edit `~/.tmux.conf`, status formats, or other user hooks and options. Changed or pre-existing plugin option values are retained as user-owned live configuration.
+
+The command prints the exact plugin declaration and status-fragment strings to remove manually from your tmux configuration. Remove the applicable lines and fragments, then remove the checkout through TPM or delete the manual clone. Native agent adapters have separate package lifecycles and are not removed by this core command.
+
 ## Troubleshooting
 
 If nothing appears:

@@ -1,0 +1,199 @@
+#!/bin/sh
+set -u
+
+failed=false
+changed=false
+diagnosed_query=false
+diagnosed_parse=false
+diagnosed_write=false
+diagnosed_load=false
+newline='
+'
+
+diagnose() {
+	failed=true
+	case $1 in
+	query)
+		[ "$diagnosed_query" = false ] || return
+		diagnosed_query=true
+		;;
+	parse)
+		[ "$diagnosed_parse" = false ] || return
+		diagnosed_parse=true
+		;;
+	write)
+		[ "$diagnosed_write" = false ] || return
+		diagnosed_write=true
+		;;
+	load)
+		[ "$diagnosed_load" = false ] || return
+		diagnosed_load=true
+		;;
+	esac
+	printf 'tmux-agents-status: uninstall: %s failed\n' "$1" >&2
+}
+
+has_global_option() {
+	tmux show-options -g "$1" >/dev/null 2>&1
+}
+
+has_server_option() {
+	tmux show-options -s "$1" >/dev/null 2>&1
+}
+
+legacy_core_loaded=false
+if has_global_option @tmux-agents-status-root &&
+	has_global_option @tmux-agents-status-protocol &&
+	[ "$(tmux show-option -gqv @tmux-agents-status-protocol 2>/dev/null)" = 2 ]; then
+	legacy_core_loaded=true
+fi
+
+remove_global_option() {
+	option=$1
+	if has_global_option "$option"; then
+		if tmux set-option -gu "$option" >/dev/null 2>&1; then
+			changed=true
+		else
+			diagnose write
+		fi
+	fi
+}
+
+remove_server_option() {
+	option=$1
+	if has_server_option "$option"; then
+		if tmux set-option -su "$option" >/dev/null 2>&1; then
+			changed=true
+		else
+			diagnose write
+		fi
+	fi
+}
+
+remove_owned_default() {
+	option=$1
+	marker=$2
+	default=$3
+	marker_owned=false
+	if has_server_option "$marker"; then
+		marker_owned=true
+	elif [ "$legacy_core_loaded" = false ]; then
+		return
+	fi
+	if has_global_option "$option"; then
+		value=$(tmux show-option -gqv "$option" 2>/dev/null && printf x) || {
+			diagnose query
+			remove_server_option "$marker"
+			return
+		}
+		value=${value%x}
+		value=${value%"$newline"}
+		if [ "$value" = "$default" ]; then
+			remove_global_option "$option"
+		fi
+	fi
+	if [ "$marker_owned" = true ]; then
+		remove_server_option "$marker"
+	fi
+}
+
+remove_hook_command() {
+	hook=$1
+	command=$2
+	hooks=$(tmux show-hooks -g "$hook" 2>/dev/null && printf x) || {
+		diagnose query
+		return
+	}
+	hooks=${hooks%x}
+	selectors=$(printf '%s\n' "$hooks" | awk -v hook="$hook" -v command="$command" '
+		$1 ~ ("^" hook "\\[[0-9]+\\]$") {
+			selector = $1
+			sub(/^[^[:space:]]+[[:space:]]+/, "")
+			if ($0 == command) print selector
+		}
+	' 2>/dev/null) || {
+		diagnose parse
+		return
+	}
+	while IFS= read -r selector; do
+		[ -n "$selector" ] || continue
+		case $selector in
+		"$hook"\[[0-9]*\]) ;;
+		*) diagnose parse; return ;;
+		esac
+		if tmux set-hook -gu "$selector" >/dev/null 2>&1; then
+			changed=true
+		else
+			diagnose write
+		fi
+	done <<EOF
+$selectors
+EOF
+}
+
+ack_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
+cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
+for hook in window-pane-changed session-window-changed client-session-changed client-attached; do
+	remove_hook_command "$hook" "$ack_command"
+done
+remove_hook_command pane-exited "$cleanup_command"
+
+options=$(tmux show-options -s 2>/dev/null && printf x) || {
+	diagnose query
+	options=x
+}
+options=${options%x}
+record_options=$(printf '%s\n' "$options" | awk '
+	$1 ~ /^@tmux-agents-status-(state|ack)-%[0-9]+$/ { print $1 }
+' 2>/dev/null) || {
+	diagnose parse
+	record_options=
+}
+while IFS= read -r option; do
+	[ -n "$option" ] || continue
+	remove_server_option "$option"
+done <<EOF
+$record_options
+EOF
+
+for marker in \
+	@tmux-agents-status-hook-window-pane-changed \
+	@tmux-agents-status-hook-session-window-changed \
+	@tmux-agents-status-hook-client-session-changed \
+	@tmux-agents-status-hook-client-attached \
+	@tmux-agents-status-hook-pane-exited; do
+	remove_server_option "$marker"
+done
+
+remove_owned_default @tmux-agents-status-window @tmux-agents-status-default-window '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})'
+remove_owned_default @tmux-agents-status-other-sessions @tmux-agents-status-default-other-sessions '#(#{q:@tmux-agents-status-root}/scripts/render-other-sessions #{q:session_id})'
+remove_owned_default @tmux-agents-status-running-glyph @tmux-agents-status-default-running-glyph '•'
+remove_owned_default @tmux-agents-status-running-style @tmux-agents-status-default-running-style 'fg=cyan'
+remove_owned_default @tmux-agents-status-waiting-glyph @tmux-agents-status-default-waiting-glyph '?'
+remove_owned_default @tmux-agents-status-waiting-style @tmux-agents-status-default-waiting-style 'fg=yellow'
+remove_owned_default @tmux-agents-status-completed-glyph @tmux-agents-status-default-completed-glyph '✓'
+remove_owned_default @tmux-agents-status-completed-style @tmux-agents-status-default-completed-style 'fg=green'
+remove_owned_default @tmux-agents-status-failed-glyph @tmux-agents-status-default-failed-glyph '!'
+remove_owned_default @tmux-agents-status-failed-style @tmux-agents-status-default-failed-style 'fg=red'
+remove_owned_default @tmux-agents-status-unread-style @tmux-agents-status-default-unread-style 'reverse,bold'
+
+remove_global_option @tmux-agents-status-root
+remove_global_option @tmux-agents-status-protocol
+
+if [ "$changed" = true ]; then
+	root=$(CDPATH= cd "$(dirname "$0" 2>/dev/null)" && pwd -P) || root=
+	if [ -n "$root" ]; then
+		"$root/refresh-clients" uninstall
+	else
+		diagnose load
+	fi
+fi
+
+printf '%s\n' \
+	'tmux-agents-status: remove these exact strings from tmux configuration:' \
+	"set -g @plugin 'hiback/tmux-agents-status'" \
+	'run-shell ~/.tmux/plugins/tmux-agents-status/tmux-agents-status.tmux' \
+	'#{E:@tmux-agents-status-window}' \
+	'#{E:@tmux-agents-status-other-sessions}'
+
+[ "$failed" = false ]
