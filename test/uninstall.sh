@@ -64,9 +64,14 @@ tmux_test run-shell "$root/tmux-agents-status.tmux"
 assert_equal '1' "$(server_option @tmux-agents-status-default-running-glyph)" 'loading marks a newly installed default as plugin-owned'
 assert_absent_server @tmux-agents-status-default-waiting-glyph 'loading does not claim a pre-existing option even when it equals the default'
 assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'loading records the selector of its own appended hook'
+tmux_test set-option -s @tmux-agents-status-hook-client-attached 1
+tmux_test run-shell "$root/tmux-agents-status.tmux"
+assert_equal 'client-attached[0]' "$(server_option @tmux-agents-status-hook-client-attached)" 'reload migrates a legacy ownership marker to its matching hook selector'
 hook_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
 tmux_test set-hook -ag window-pane-changed "$hook_command"
 tmux_test set-hook -ag window-pane-changed 'display-message user-after'
+tmux_test set-hook -ag session-window-changed "$hook_command"
+tmux_test set-option -s @tmux-agents-status-hook-session-window-changed 1
 tmux_test set-hook -ag pane-exited 'display-message user-pane-after'
 set -- $(tmux_test display-message -p '#{pane_id}')
 pane=$1
@@ -96,6 +101,7 @@ window-pane-changed[2] $hook_command
 window-pane-changed[3] display-message user-after" "$(tmux_test show-hooks -g window-pane-changed)" 'uninstall removes only the pane-selection hook named by its ownership marker'
 assert_equal "pane-exited[0] display-message user-pane-before
 pane-exited[2] display-message user-pane-after" "$(tmux_test show-hooks -g pane-exited)" 'uninstall removes only its pane-exit hook'
+assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'a legacy ownership marker removes exactly one owned hook occurrence and preserves an identical user occurrence'
 
 for option in \
 	@tmux-agents-status-root \

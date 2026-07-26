@@ -85,6 +85,28 @@ remove_owned_default() {
 	remove_server_option "$marker"
 }
 
+find_hook_selector() {
+	hook=$1
+	command=$2
+	tmux show-hooks -g "$hook" 2>/dev/null | awk -v hook="$hook" -v command="$command" '
+		$1 ~ ("^" hook "\\[[0-9]+\\]$") {
+			candidate = $1
+			sub(/^[^[:space:]]+[[:space:]]+/, "")
+			if ($0 == command) {
+				number = candidate
+				sub("^" hook "\\[", "", number)
+				sub("\\]$", "", number)
+				if (!found || number > maximum) {
+					found = 1
+					maximum = number
+					selector = candidate
+				}
+			}
+		}
+		END { if (found) print selector }
+	'
+}
+
 remove_owned_hook() {
 	hook=$1
 	marker=$2
@@ -93,6 +115,11 @@ remove_owned_hook() {
 		return
 	fi
 	selector=$(tmux show-option -sqv "$marker" 2>/dev/null)
+	if [ "$selector" = 1 ]; then
+		# A legacy marker proves one matching occurrence is plugin-owned. Equal
+		# commands are interchangeable, so remove one and preserve all others.
+		selector=$(find_hook_selector "$hook" "$command")
+	fi
 	case $selector in
 	"$hook"\[[0-9]*\])
 		if tmux show-hooks -g "$hook" 2>/dev/null | awk -v selector="$selector" -v command="$command" '

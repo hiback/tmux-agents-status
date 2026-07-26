@@ -45,22 +45,10 @@ hook_matches() {
     '
 }
 
-install_hook() {
+find_hook_selector() {
     hook=$1
-    marker=$2
-    command=$3
-    selector=$(tmux show-option -sqv "$marker" 2>/dev/null || :)
-    if [ "$selector" = 1 ]; then
-        # A v2 core loaded before hook selectors were recorded. Preserve its
-        # registration rather than guessing which identical hook it owns.
-        return
-    fi
-    if [ -n "$selector" ] && hook_matches "$hook" "$selector" "$command"; then
-        return
-    fi
-    tmux set-option -su "$marker" 2>/dev/null || :
-    tmux set-hook -ag "$hook" "$command"
-    selector=$(tmux show-hooks -g "$hook" 2>/dev/null | awk -v hook="$hook" -v command="$command" '
+    command=$2
+    tmux show-hooks -g "$hook" 2>/dev/null | awk -v hook="$hook" -v command="$command" '
         $1 ~ ("^" hook "\\[[0-9]+\\]$") {
             candidate = $1
             sub(/^[^[:space:]]+[[:space:]]+/, "")
@@ -76,7 +64,28 @@ install_hook() {
             }
         }
         END { if (found) print selector }
-    ')
+    '
+}
+
+install_hook() {
+    hook=$1
+    marker=$2
+    command=$3
+    selector=$(tmux show-option -sqv "$marker" 2>/dev/null || :)
+    if [ "$selector" = 1 ]; then
+        # Legacy markers prove ownership of one indistinguishable matching
+        # occurrence. Record one selector without removing any hook.
+        selector=$(find_hook_selector "$hook" "$command")
+        case $selector in
+        "$hook"\[[0-9]*\]) tmux set-option -s "$marker" "$selector"; return ;;
+        esac
+    fi
+    if [ -n "$selector" ] && hook_matches "$hook" "$selector" "$command"; then
+        return
+    fi
+    tmux set-option -su "$marker" 2>/dev/null || :
+    tmux set-hook -ag "$hook" "$command"
+    selector=$(find_hook_selector "$hook" "$command")
     case $selector in "$hook"\[[0-9]*\]) tmux set-option -s "$marker" "$selector" ;; *) tmux set-option -s "$marker" 1 ;; esac
 }
 
