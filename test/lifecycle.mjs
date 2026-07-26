@@ -49,7 +49,16 @@ try {
 	const extension = (
 		await import(new URL("../pi/tmux-agents-status.ts", import.meta.url).href)
 	).default;
-	const tui = { mode: "tui" };
+	const sessionContext = (sessionId) => ({
+		mode: "tui",
+		stale: false,
+		sessionManager: { getSessionId: () => sessionId },
+		isIdle() {
+			if (this.stale) throw new Error("stale after session replacement");
+			return true;
+		},
+	});
+	const tui = sessionContext("session-0");
 
 	const oldGeneration = uuid("2");
 	tmux(
@@ -108,26 +117,37 @@ try {
 	assert.equal(option("ack"), completedAck);
 
 	let activeHandlers = terminalReloadHandlers;
+	let activeContext = tui;
 	for (const reason of ["new", "resume", "fork"]) {
-		await activeHandlers.get("session_shutdown")({ reason }, tui);
+		await activeHandlers.get("session_shutdown")({ reason }, activeContext);
+		activeContext.stale = true;
 		const replacedHandlers = activeHandlers;
+		const replacedContext = activeContext;
+		const nextContext = sessionContext(`session-${reason}`);
 		const nextHandlers = new Map();
 		extension({
 			...api,
 			on: (event, handler) => nextHandlers.set(event, handler),
 		});
-		await replacedHandlers.get("session_start")({ reason: "startup" }, tui);
-		await replacedHandlers.get("agent_start")({}, tui);
+		await replacedHandlers.get("session_start")(
+			{ reason: "startup" },
+			replacedContext,
+		);
+		await replacedHandlers.get("agent_start")({}, replacedContext);
 		assert.equal(option("state"), "", "replaced context must stay empty");
-		await nextHandlers.get("session_start")({ reason }, tui);
+		await nextHandlers.get("session_start")({ reason }, nextContext);
 		assert.equal(option("state"), "");
 		assert.equal(option("ack"), "");
-		await nextHandlers.get("agent_start")({}, tui);
+		await nextHandlers.get("agent_start")({}, nextContext);
 		assert.equal(option("state").split("|")[2], incarnation);
 		activeHandlers = nextHandlers;
+		activeContext = nextContext;
 	}
 
-	await activeHandlers.get("session_shutdown")({ reason: "quit" }, tui);
+	await activeHandlers.get("session_shutdown")(
+		{ reason: "quit" },
+		activeContext,
+	);
 	const failed = option("state");
 	assert.match(failed, /\|failed\|[0-9a-f-]{36}$/);
 
@@ -136,21 +156,30 @@ try {
 		...api,
 		on: (event, handler) => waitingHandlers.set(event, handler),
 	});
-	await waitingHandlers.get("session_start")({ reason: "startup" }, tui);
-	await waitingHandlers.get("agent_start")({}, tui);
+	await waitingHandlers.get("session_start")(
+		{ reason: "startup" },
+		activeContext,
+	);
+	await waitingHandlers.get("agent_start")({}, activeContext);
 	tmux(
 		"set-option",
 		"-s",
 		`@tmux-agents-status-state-${pane}`,
 		`v1|${process.pid}|${incarnation}|waiting|${uuid("6")}`,
 	);
-	await waitingHandlers.get("session_shutdown")({ reason: "quit" }, tui);
+	await waitingHandlers.get("session_shutdown")(
+		{ reason: "quit" },
+		activeContext,
+	);
 	assert.match(option("state"), /\|failed\|[0-9a-f-]{36}$/);
 
 	const replacement = `v1|88|${uuid("3")}|running|-`;
 	tmux("set-option", "-s", `@tmux-agents-status-state-${pane}`, replacement);
-	await waitingHandlers.get("agent_start")({}, tui);
-	await waitingHandlers.get("session_shutdown")({ reason: "quit" }, tui);
+	await waitingHandlers.get("agent_start")({}, activeContext);
+	await waitingHandlers.get("session_shutdown")(
+		{ reason: "quit" },
+		activeContext,
+	);
 	assert.equal(option("state"), replacement);
 
 	tmux("set-option", "-su", `@tmux-agents-status-state-${pane}`);
@@ -159,8 +188,8 @@ try {
 		...api,
 		on: (event, handler) => absentHandlers.set(event, handler),
 	});
-	await absentHandlers.get("session_start")({ reason: "new" }, tui);
-	await absentHandlers.get("agent_start")({}, tui);
+	await absentHandlers.get("session_start")({ reason: "new" }, activeContext);
+	await absentHandlers.get("agent_start")({}, activeContext);
 	assert.equal(
 		option("state"),
 		"",
@@ -172,14 +201,14 @@ try {
 		...api,
 		on: (event, handler) => idleHandlers.set(event, handler),
 	});
-	await idleHandlers.get("session_start")({ reason: "startup" }, tui);
-	await idleHandlers.get("agent_start")({}, tui);
+	await idleHandlers.get("session_start")({ reason: "startup" }, activeContext);
+	await idleHandlers.get("agent_start")({}, activeContext);
 	await idleHandlers.get("message_end")(
 		{ message: { role: "assistant", stopReason: "stop" } },
-		tui,
+		activeContext,
 	);
-	await idleHandlers.get("agent_settled")({}, tui);
-	await idleHandlers.get("session_shutdown")({ reason: "quit" }, tui);
+	await idleHandlers.get("agent_settled")({}, activeContext);
+	await idleHandlers.get("session_shutdown")({ reason: "quit" }, activeContext);
 	assert.equal(option("state"), "");
 	assert.equal(option("ack"), "");
 

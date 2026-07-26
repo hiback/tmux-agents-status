@@ -92,7 +92,12 @@ async function initialize(instance, mode = tui) {
 	instance.calls.length = 0;
 }
 
-const tui = { mode: "tui" };
+const sessionContext = (sessionId) => ({
+	mode: "tui",
+	sessionManager: { getSessionId: () => sessionId },
+	isIdle: () => true,
+});
+const tui = sessionContext("parent-session");
 const assistant = (stopReason) => ({
 	message: { role: "assistant", stopReason },
 });
@@ -167,6 +172,36 @@ try {
 		"-t",
 		"client-two",
 	]);
+
+	const factoryOnly = fakePi();
+	extension(factoryOnly.api);
+	assert.deepEqual(
+		factoryOnly.calls,
+		[],
+		"a nested factory alone must not replace the parent runtime",
+	);
+
+	for (const sessionId of ["child-session-1", "child-session-2"]) {
+		const child = fakePi();
+		extension(child.api);
+		const childContext = sessionContext(sessionId);
+		await child.handlers.get("session_start")(
+			{ reason: "startup" },
+			childContext,
+		);
+		await child.handlers.get("agent_start")({}, childContext);
+		await child.handlers.get("message_end")(assistant("stop"), childContext);
+		await child.handlers.get("agent_settled")({}, childContext);
+		await child.handlers.get("session_shutdown")(
+			{ reason: "quit" },
+			childContext,
+		);
+		assert.deepEqual(
+			child.calls,
+			[],
+			"a concurrent child session must not publish pane state",
+		);
+	}
 
 	// Intermediate failures and retries stay running; only the latest assistant
 	// outcome is classified at final settlement.
@@ -545,6 +580,46 @@ try {
 		1,
 		"a new accepted turn must discard the prior pending outcome",
 	);
+
+	for (const [priorContext, nextContext, message] of [
+		[
+			{ mode: "tui" },
+			sessionContext("known-after-missing"),
+			"missing session identity must fail safe to replacement",
+		],
+		[
+			{
+				mode: "tui",
+				sessionManager: { getSessionId: () => "known-after-missing" },
+			},
+			sessionContext("known-after-missing-probe"),
+			"a missing prior probe must fail safe to replacement",
+		],
+		[
+			{
+				...sessionContext("known-after-missing-probe"),
+				isIdle: () => {
+					throw new Error("inconclusive-secret");
+				},
+			},
+			sessionContext("known-after-probe-error"),
+			"an unexpected prior probe error must fail safe to replacement",
+		],
+	]) {
+		const prior = fakePi();
+		extension(prior.api);
+		await prior.handlers.get("session_start")(
+			{ reason: "startup" },
+			priorContext,
+		);
+		const replacement = fakePi();
+		extension(replacement.api);
+		await replacement.handlers.get("session_start")(
+			{ reason: "startup" },
+			nextContext,
+		);
+		assert.notEqual(replacement.calls.length, 0, message);
+	}
 
 	for (const [tmux, pane] of [
 		["", "%42"],

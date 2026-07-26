@@ -3,7 +3,11 @@ type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 type State = "running" | "waiting" | "completed" | "failed";
 type StartReason = "startup" | "reload" | "new" | "resume" | "fork";
 type ShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
-type Context = { mode: Mode };
+type Context = {
+	mode: Mode;
+	isIdle?: () => boolean;
+	sessionManager?: { getSessionId?: () => string };
+};
 
 interface PiAPI {
 	on(
@@ -29,7 +33,9 @@ interface ProcessOwnership {
 	pane: string;
 	incarnation: string;
 	claimed: boolean;
-	activeRuntime: symbol;
+	activeRuntime?: symbol;
+	primaryContext?: Context;
+	sessionId?: string;
 }
 
 interface RecordState {
@@ -66,9 +72,7 @@ export default function (pi: PiAPI) {
 					pane,
 					incarnation: crypto.randomUUID(),
 					claimed: false,
-					activeRuntime: runtime,
 				};
-	ownership.activeRuntime = runtime;
 	ownershipStore[ownershipKey] = ownership;
 	const incarnation = ownership.incarnation;
 	const stateOption = `@tmux-agents-status-state-${pane}`;
@@ -77,6 +81,7 @@ export default function (pi: PiAPI) {
 	let outcome: StopReason | undefined;
 	let settlementPending = false;
 	let canCreate = false;
+	let ended = false;
 
 	function diagnose(operation: string) {
 		console.error(`tmux-agents-status: companion: ${operation} failed`);
@@ -95,6 +100,32 @@ export default function (pi: PiAPI) {
 
 	function isActive() {
 		return ownershipStore[ownershipKey]?.activeRuntime === runtime;
+	}
+
+	function stableSessionId(ctx: Context) {
+		try {
+			const sessionId = ctx.sessionManager?.getSessionId?.();
+			return sessionId || undefined;
+		} catch {
+			return;
+		}
+	}
+
+	function isConcurrentSecondary(ctx: Context, sessionId: string | undefined) {
+		if (
+			!ownership.primaryContext ||
+			!ownership.sessionId ||
+			!sessionId ||
+			ownership.sessionId === sessionId
+		)
+			return false;
+		try {
+			if (!ownership.primaryContext.isIdle) return false;
+			ownership.primaryContext.isIdle();
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	async function clients() {
@@ -263,7 +294,12 @@ export default function (pi: PiAPI) {
 	}
 
 	pi.on("session_start", async (event, ctx) => {
-		if (!isActive() || ctx.mode !== "tui") return;
+		if (ended || ctx.mode !== "tui") return;
+		const sessionId = stableSessionId(ctx);
+		if (isConcurrentSecondary(ctx, sessionId)) return;
+		ownership.activeRuntime = runtime;
+		ownership.primaryContext = ctx;
+		ownership.sessionId = sessionId;
 		try {
 			if (event.reason === "startup") {
 				if (await clearOptions(false)) canCreate = true;
@@ -293,8 +329,9 @@ export default function (pi: PiAPI) {
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		if (!isActive() || ctx.mode !== "tui" || event.reason === "reload") return;
+		if (!isActive() || ctx.mode !== "tui") return;
 		try {
+			if (event.reason === "reload") return;
 			if (event.reason !== "quit") {
 				await clearOptions(true);
 				return;
@@ -306,6 +343,9 @@ export default function (pi: PiAPI) {
 			} else await clearOptions(true);
 		} catch {
 			diagnose("handler");
+		} finally {
+			ended = true;
+			if (isActive()) ownership.activeRuntime = undefined;
 		}
 	});
 
