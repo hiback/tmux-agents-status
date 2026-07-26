@@ -7,6 +7,8 @@ Show Pi activity in the tmux status bar, including active turns and unread resul
 - `!` Pi failed or was cancelled
 - Unread results are highlighted until you visit their pane
 
+![Tmux status bar showing agent activity](assets/tmux-agents-status.png)
+
 There is no background daemon. The status is refreshed when Pi or tmux state changes.
 
 ## Requirements
