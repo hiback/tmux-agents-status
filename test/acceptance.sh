@@ -65,10 +65,10 @@ assert_equal 'fg=red' "$(option @tmux-agents-status-failed-style)" 'failed style
 assert_equal 'reverse,bold' "$(option @tmux-agents-status-unread-style)" 'unread style default is installed'
 
 hook_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
-assert_equal '1' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'window-pane hook marker is installed'
-assert_equal '1' "$(server_option @tmux-agents-status-hook-session-window-changed)" 'session-window hook marker is installed'
-assert_equal '1' "$(server_option @tmux-agents-status-hook-client-session-changed)" 'client-session hook marker is installed'
-assert_equal '1' "$(server_option @tmux-agents-status-hook-client-attached)" 'client-attached hook marker is installed'
+assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'window-pane hook ownership selector is installed'
+assert_equal 'session-window-changed[0]' "$(server_option @tmux-agents-status-hook-session-window-changed)" 'session-window hook ownership selector is installed'
+assert_equal 'client-session-changed[0]' "$(server_option @tmux-agents-status-hook-client-session-changed)" 'client-session hook ownership selector is installed'
+assert_equal 'client-attached[0]' "$(server_option @tmux-agents-status-hook-client-attached)" 'client-attached hook ownership selector is installed'
 assert_equal "window-pane-changed[0] display-message user-hook
 window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'the pane-selection hook appends after a user handler'
 assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'the window-selection hook is installed'

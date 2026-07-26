@@ -30,18 +30,62 @@ install_default() {
         tmux set-option -s "$marker" 1
     fi
 }
-for hook in window-pane-changed session-window-changed client-session-changed client-attached; do
-    marker=@tmux-agents-status-hook-$hook
-    if [ -z "$(tmux show-option -sqv "$marker" 2>/dev/null)" ]; then
-        tmux set-hook -ag "$hook" 'run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
-        tmux set-option -s "$marker" 1
+
+hook_matches() {
+    hook=$1
+    selector=$2
+    command=$3
+    case $selector in "$hook"\[[0-9]*\]) ;; *) return 1 ;; esac
+    tmux show-hooks -g "$hook" 2>/dev/null | awk -v selector="$selector" -v command="$command" '
+        $1 == selector {
+            sub(/^[^[:space:]]+[[:space:]]+/, "")
+            if ($0 == command) found = 1
+        }
+        END { exit !found }
+    '
+}
+
+install_hook() {
+    hook=$1
+    marker=$2
+    command=$3
+    selector=$(tmux show-option -sqv "$marker" 2>/dev/null || :)
+    if [ "$selector" = 1 ]; then
+        # A v2 core loaded before hook selectors were recorded. Preserve its
+        # registration rather than guessing which identical hook it owns.
+        return
     fi
+    if [ -n "$selector" ] && hook_matches "$hook" "$selector" "$command"; then
+        return
+    fi
+    tmux set-option -su "$marker" 2>/dev/null || :
+    tmux set-hook -ag "$hook" "$command"
+    selector=$(tmux show-hooks -g "$hook" 2>/dev/null | awk -v hook="$hook" -v command="$command" '
+        $1 ~ ("^" hook "\\[[0-9]+\\]$") {
+            candidate = $1
+            sub(/^[^[:space:]]+[[:space:]]+/, "")
+            if ($0 == command) {
+                number = candidate
+                sub("^" hook "\\[", "", number)
+                sub("\\]$", "", number)
+                if (!found || number > maximum) {
+                    found = 1
+                    maximum = number
+                    selector = candidate
+                }
+            }
+        }
+        END { if (found) print selector }
+    ')
+    case $selector in "$hook"\[[0-9]*\]) tmux set-option -s "$marker" "$selector" ;; *) tmux set-option -s "$marker" 1 ;; esac
+}
+
+ack_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
+for hook in window-pane-changed session-window-changed client-session-changed client-attached; do
+    install_hook "$hook" "@tmux-agents-status-hook-$hook" "$ack_command"
 done
-marker=@tmux-agents-status-hook-pane-exited
-if [ -z "$(tmux show-option -sqv "$marker" 2>/dev/null)" ]; then
-    tmux set-hook -ag pane-exited 'run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
-    tmux set-option -s "$marker" 1
-fi
+cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
+install_hook pane-exited @tmux-agents-status-hook-pane-exited "$cleanup_command"
 "$root/scripts/cleanup-stale" || :
 
 install_default @tmux-agents-status-window @tmux-agents-status-default-window '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})'
