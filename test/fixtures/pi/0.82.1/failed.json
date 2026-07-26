@@ -1,0 +1,10 @@
+{
+  "version": "0.82.1",
+  "expectedOutcome": "failed",
+  "events": [
+    { "name": "session_start", "event": { "reason": "startup" } },
+    { "name": "agent_start", "event": {} },
+    { "name": "message_end", "event": { "message": { "role": "assistant", "stopReason": "aborted" } } },
+    { "name": "agent_settled", "event": {} }
+  ]
+}

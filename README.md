@@ -1,25 +1,26 @@
 # Tmux Agents Status
 
-Show Pi activity in the tmux status bar, including active turns and unread results in other panes or sessions.
+Show coding-agent activity in the tmux status bar, including active turns and unread results in other panes or sessions.
 
-- `•` Pi is working
-- `✓` Pi finished
-- `!` Pi failed or was cancelled
+- `•` an agent is working
+- `?` an agent is waiting for user input (when its adapter supports this)
+- `✓` an agent finished
+- `!` an agent failed or was cancelled
 - Unread results are highlighted until you visit their pane
 
 ![Tmux status bar showing agent activity](assets/tmux-agents-status.png)
 
-There is no background daemon. The status is refreshed when Pi or tmux state changes.
+There is no background daemon. Native adapters send bounded lifecycle events to the shared tmux core, and status is refreshed only when agent or tmux state changes. The core is the only component that persists tmux lifecycle state.
 
 ## Requirements
 
 - tmux 3.0 or newer on Linux or macOS
-- [Pi](https://github.com/badlogic/pi-mono) 0.80.4 or newer, running in TUI mode
+- [Pi](https://github.com/badlogic/pi-mono) 0.81.1 or newer, running in TUI mode
 - Pi must run directly inside a tmux pane
 
 ## Install
 
-The tmux plugin and Pi extension are both required.
+The canonical tmux core and at least one native agent adapter are required. Pi is the adapter implemented in this checkout.
 
 ### 1. Install the tmux plugin
 
@@ -49,14 +50,13 @@ run-shell ~/.tmux/plugins/tmux-agents-status/tmux-agents-status.tmux
 
 ### 2. Install the Pi extension
 
-Install this repository as a Pi package:
+Until the Pi adapter is published, install its independently versioned package directory from this checkout:
 
 ```sh
-pi install git:github.com/hiback/tmux-agents-status
+pi install ./packages/pi
 ```
 
-Then enter `/reload` in Pi, or restart Pi.
-Run `pi update --extensions` to update it.
+Then enter `/reload` in Pi, or restart Pi. The package contains only the Pi adapter; it discovers and invokes the canonical core loaded by tmux and becomes a no-op when that core is missing or protocol-incompatible.
 
 The extension runs as your user. Install it only from source you trust.
 
@@ -158,11 +158,15 @@ Set a glyph to an empty string to hide that state. Styles use tmux syntax withou
 
 ## How it behaves
 
-The window fragment shows one symbol for each Pi pane in the current tmux window. A finished or failed symbol remains visible, while unread styling disappears after you visit the pane.
+The window fragment shows one symbol for each tracked agent pane in the current tmux window. A waiting, finished, or failed symbol remains visible, while unread styling disappears after you visit the pane.
 
 The other-session fragment shows active turns and unread results from other tmux sessions. Panes linked to the current session are not counted twice.
 
-Pi `/reload` keeps the current status. Starting a new, resumed, or forked Pi session clears the old status until the next turn begins. Closing a pane removes its status.
+Pi `/reload` keeps the current status. Starting a new, resumed, or forked Pi session replaces ownership and clears the old status until the next turn begins. Closing a pane removes its status.
+
+Pi reports exact `running` from accepted `agent_start` through `agent_settled`. Settled `stop` and terminal `toolUse` outcomes map approximately to `completed`; settled `error`, `length`, and `aborted` outcomes map approximately to `failed`. Retries, compaction, tools, and queued continuations stay running until settlement. Generic Pi waits are unsupported and are never inferred.
+
+Adapters and the core exchange protocol major 2 lifecycle identifiers only. They do not inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content. v1, future-version, malformed, and oversized tmux records are ignored.
 
 ## Troubleshooting
 
@@ -178,6 +182,6 @@ The extension is intentionally inactive outside tmux and in Pi print, JSON, or R
 
 ## Limitations
 
-- One directly running Pi process per pane is supported.
-- Pi and tmux must run on the same host.
+- One directly running main agent per pane is supported; subagents and background work do not take pane ownership.
+- The agent and tmux must run on the same host.
 - Nested tmux, SSH aggregation, and Windows are not supported.

@@ -36,8 +36,9 @@ server_option() {
 	tmux_test show-option -sqv "$1"
 }
 
-node "$root/test/extension-running.mjs"
+node "$root/test/pi-adapter.mjs"
 node "$root/test/lifecycle.mjs"
+"$root/test/state-core.sh"
 "$root/test/acknowledge.sh"
 "$root/test/death-cleanup.sh"
 "$root/test/degradation.sh"
@@ -48,6 +49,7 @@ tmux_test set-hook -g window-pane-changed 'display-message user-hook'
 tmux_test run-shell "$root/tmux-agents-status.tmux"
 
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is installed'
+assert_equal '2' "$(option @tmux-agents-status-protocol)" 'core protocol major is published'
 assert_equal '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})' "$(option @tmux-agents-status-window)" 'window fragment is installed'
 assert_equal '#(#{q:@tmux-agents-status-root}/scripts/render-other-sessions #{q:session_id})' "$(option @tmux-agents-status-other-sessions)" 'other-sessions fragment is installed'
 assert_equal '•' "$(option @tmux-agents-status-running-glyph)" 'running glyph default is installed'
@@ -64,10 +66,12 @@ hook_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:p
 assert_equal '1' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'window-pane hook marker is installed'
 assert_equal '1' "$(server_option @tmux-agents-status-hook-session-window-changed)" 'session-window hook marker is installed'
 assert_equal '1' "$(server_option @tmux-agents-status-hook-client-session-changed)" 'client-session hook marker is installed'
+assert_equal '1' "$(server_option @tmux-agents-status-hook-client-attached)" 'client-attached hook marker is installed'
 assert_equal "window-pane-changed[0] display-message user-hook
 window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'the pane-selection hook appends after a user handler'
 assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'the window-selection hook is installed'
 assert_equal "client-session-changed[0] $hook_command" "$(tmux_test show-hooks -g client-session-changed)" 'the session-selection hook is installed'
+assert_equal "client-attached[0] $hook_command" "$(tmux_test show-hooks -g client-attached)" 'the client-attachment hook is installed'
 
 # Loading after user customization must preserve theme-owned formats and plugin overrides.
 tmux_test set-option -g window-status-format 'custom window'
@@ -158,17 +162,30 @@ away_pane=$3
 visit_pane=$(tmux_test split-window -d -t "$visit_session:$visit_window" -P -F '#{pane_id}')
 tmux_test switch-client -c "$control_client" -t "$visit_session"
 incarnation=11111111-1111-4111-8111-111111111111
-waiting_generation=22222222-2222-4222-8222-222222222222
-completed_generation=33333333-3333-4333-8333-333333333333
-failed_generation=44444444-4444-4444-8444-444444444444
-rapid_generation=55555555-5555-4555-8555-555555555555
+waiting_generation=g:22222222222222222222222222222222
+completed_generation=g:33333333333333333333333333333333
+failed_generation=g:44444444444444444444444444444444
+rapid_generation=g:55555555555555555555555555555555
 tmux_test set-option -g @tmux-agents-status-failed-glyph 'F'
 server_tmux="$(tmux_test display-message -p '#{socket_path}'),$$,0"
 render_window() {
 	TMUX="$server_tmux" "$root/scripts/render-window" "$@"
 }
 
-visit_state="v1|$$|$incarnation|waiting|$waiting_generation"
+# A core-created alert in the pane currently active for an attached client is
+# acknowledged in the same ordered mutation.
+tmux_test select-pane -t "$visit_pane"
+active_owner=pi:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+active_turn=turn:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+TMUX="$server_tmux" TMUX_PANE="$visit_pane" "$root/scripts/state-core" 2 claim "$active_owner" "pid:$$"
+TMUX="$server_tmux" TMUX_PANE="$visit_pane" "$root/scripts/state-core" 2 start "$active_owner" "$active_turn"
+TMUX="$server_tmux" TMUX_PANE="$visit_pane" "$root/scripts/state-core" 2 finish "$active_owner" "$active_turn" completed
+active_generation=$(server_option "@tmux-agents-status-state-$visit_pane")
+active_generation=$(printf '%s\n' "$active_generation" | awk -F '|' '{ print $6 }')
+assert_equal "$active_generation" "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'an alert created in an already-active pane begins acknowledged'
+tmux_test select-pane -t "$away_pane"
+
+visit_state="v2|$incarnation|pid:$$|-|waiting|$waiting_generation|running|request"
 tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$visit_state"
 assert_equal '#[default] #[fg=black,underscore]W#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'the pane-hook destination starts unread from the fragment baseline'
 tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-window-pane-acknowledged'
@@ -181,7 +198,7 @@ tmux_test set-hook -gu 'window-pane-changed[2]'
 tmux_test select-pane -t "$away_pane"
 sleep 60 &
 abrupt_owner=$!
-virtual_state="v1|$abrupt_owner|$incarnation|running|-"
+virtual_state="v2|$incarnation|pid:$abrupt_owner|-|running|-|-|-"
 tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$virtual_state"
 tmux_test set-option -su "@tmux-agents-status-ack-$visit_pane"
 kill "$abrupt_owner"
@@ -189,12 +206,12 @@ wait "$abrupt_owner" 2>/dev/null || :
 assert_equal '#[default] #[fg=magenta,underscore]F#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'abrupt owner death derives a visible virtual failure'
 tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-virtual-failure-acknowledged'
 tmux_test select-pane -t "$visit_pane" \; wait-for tas-virtual-failure-acknowledged
-assert_equal "dead-$incarnation" "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'visiting a virtual failure acknowledges its deterministic effective generation'
+assert_equal "d:$incarnation" "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'visiting a virtual failure acknowledges its deterministic effective generation'
 assert_equal "$virtual_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'acknowledging a virtual failure leaves stored state intact'
-assert_equal '' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'acknowledged dead-owner state is hidden'
+assert_equal '#[default] #[fg=magenta]F#[default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'acknowledged dead-owner state remains visible without unread emphasis'
 tmux_test set-hook -gu 'window-pane-changed[2]'
 
-rapid_state="v1|$$|$incarnation|waiting|$rapid_generation"
+rapid_state="v2|$incarnation|pid:$$|-|waiting|$rapid_generation|running|request"
 tmux_test select-pane -t "$away_pane"
 tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$rapid_state"
 tmux_test set-option -su "@tmux-agents-status-ack-$visit_pane"
@@ -209,7 +226,7 @@ tmux_test set-hook -gu 'window-pane-changed[2]'
 set -- $(tmux_test new-window -d -t "$visit_session:" -P -F '#{window_id} #{pane_id}')
 visit_other_window=$1
 visit_other_pane=$2
-window_state="v1|$$|$incarnation|completed|$completed_generation"
+window_state="v2|$incarnation|pid:$$|-|completed|$completed_generation|-|-"
 tmux_test set-option -s "@tmux-agents-status-state-$visit_other_pane" "$window_state"
 assert_equal '#[default] #[fg=blue,underscore]C#[default]' "$(render_window "$visit_session" "$visit_other_window" "$visit_other_pane")" 'the window-hook destination starts unread'
 tmux_test set-hook -ag session-window-changed 'wait-for -S tas-session-window-acknowledged'
@@ -223,7 +240,7 @@ set -- $(tmux_test new-session -d -s acknowledgement-destination -P -F '#{sessio
 visit_other_session=$1
 visit_session_window=$2
 visit_session_pane=$3
-session_state="v1|$$|$incarnation|failed|$failed_generation"
+session_state="v2|$incarnation|pid:$$|-|failed|$failed_generation|-|-"
 tmux_test set-option -s "@tmux-agents-status-state-$visit_session_pane" "$session_state"
 assert_equal '#[default] #[fg=magenta,underscore]F#[default]' "$(render_window "$visit_other_session" "$visit_session_window" "$visit_session_pane")" 'the client-hook destination starts unread'
 tmux_test set-hook -ag client-session-changed 'wait-for -S tas-client-session-acknowledged'
@@ -250,9 +267,9 @@ other_pane=$2
 incarnation=11111111-1111-4111-8111-111111111111
 
 for pane in "$active_pane" "$third_pane" "$other_pane"; do
-	tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|running|-"
+	tmux_test set-option -s "@tmux-agents-status-state-$pane" "v2|$incarnation|pid:$$|-|running|-|-|-"
 done
-tmux_test set-option -s "@tmux-agents-status-state-$second_pane" 'v1|0|not-an-incarnation|running|-'
+tmux_test set-option -s "@tmux-agents-status-state-$second_pane" 'v1|99|legacy-owner|running|-'
 
 server_tmux="$(tmux_test display-message -p '#{socket_path}'),$$,0"
 render_window() {
@@ -276,13 +293,13 @@ tmux_test set-option -su "@tmux-agents-status-state-$third_pane"
 assert_equal '' "$(render_window "$session" "$window" "$active_pane")" 'a window without valid records emits an empty fragment'
 
 # Live alerts render their actual state; acknowledgement changes only unread emphasis.
-waiting_generation=22222222-2222-4222-8222-222222222222
-completed_generation=33333333-3333-4333-8333-333333333333
-failed_generation=44444444-4444-4444-8444-444444444444
-tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|$waiting_generation"
-tmux_test set-option -s "@tmux-agents-status-state-$second_pane" "v1|$$|$incarnation|completed|$completed_generation"
+waiting_generation=g:22222222222222222222222222222222
+completed_generation=g:33333333333333333333333333333333
+failed_generation=g:44444444444444444444444444444444
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v2|$incarnation|pid:$$|-|waiting|$waiting_generation|running|request"
+tmux_test set-option -s "@tmux-agents-status-state-$second_pane" "v2|$incarnation|pid:$$|-|completed|$completed_generation|-|-"
 tmux_test set-option -s "@tmux-agents-status-ack-$second_pane" "$completed_generation"
-tmux_test set-option -s "@tmux-agents-status-state-$third_pane" "v1|$$|$incarnation|failed|$failed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$third_pane" "v2|$incarnation|pid:$$|-|failed|$failed_generation|-|-"
 tmux_test set-option -s "@tmux-agents-status-ack-$third_pane" "$completed_generation"
 tmux_test set-option -g @tmux-agents-status-failed-glyph '!!#'
 
@@ -296,15 +313,15 @@ tmux_test set-option -g @tmux-agents-status-completed-style ''
 tmux_test set-option -g @tmux-agents-status-failed-style ''
 assert_equal '#[default] #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'empty glyphs hide one state and empty styles remain on the fragment baseline'
 
-tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|-"
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v2|$incarnation|pid:$$|-|waiting|-|running|request"
 assert_equal '#[default] #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'state-inconsistent generations are omitted without hiding valid siblings'
 
 tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W'
-tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|$waiting_generation
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v2|$incarnation|pid:$$|-|waiting|$waiting_generation|running|request
 malformed"
 assert_equal '#[default] #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'a valid-prefix multiline record is omitted without hiding valid siblings'
 
-tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v1|$$|$incarnation|waiting|$waiting_generation
+tmux_test set-option -s "@tmux-agents-status-state-$active_pane" "v2|$incarnation|pid:$$|-|waiting|$waiting_generation|running|request
 "
 assert_equal '#[default] #[underscore]!!###[default]C' "$(render_window "$session" "$window" "$active_pane")" 'an otherwise-valid record ending in a newline is omitted without hiding valid siblings'
 
@@ -335,12 +352,12 @@ higher_running=$3
 tmux_test link-window -s "$low_session:$low_window" -t "$higher_session:"
 
 for pane in "$current_linked_pane" "$first_running" "$higher_running"; do
-	tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|running|-"
+	tmux_test set-option -s "@tmux-agents-status-state-$pane" "v2|$incarnation|pid:$$|-|running|-|-|-"
 done
-tmux_test set-option -s "@tmux-agents-status-state-$first_waiting" "v1|$$|$incarnation|waiting|$waiting_generation"
-tmux_test set-option -s "@tmux-agents-status-state-$first_malformed" 'v1|0|bad|running|-'
-tmux_test set-option -s "@tmux-agents-status-state-$low_completed" "v1|$$|$incarnation|completed|$completed_generation"
-tmux_test set-option -s "@tmux-agents-status-state-$low_failed" "v1|$$|$incarnation|failed|$failed_generation"
+tmux_test set-option -s "@tmux-agents-status-state-$first_waiting" "v2|$incarnation|pid:$$|-|waiting|$waiting_generation|running|request"
+tmux_test set-option -s "@tmux-agents-status-state-$first_malformed" 'v1|99|legacy-owner|running|-'
+tmux_test set-option -s "@tmux-agents-status-state-$low_completed" "v2|$incarnation|pid:$$|-|completed|$completed_generation|-|-"
+tmux_test set-option -s "@tmux-agents-status-state-$low_failed" "v2|$incarnation|pid:$$|-|failed|$failed_generation|-|-"
 tmux_test set-option -su "@tmux-agents-status-ack-$first_waiting"
 tmux_test set-option -su "@tmux-agents-status-ack-$low_completed"
 tmux_test set-option -su "@tmux-agents-status-ack-$low_failed"
@@ -431,8 +448,8 @@ show-option:-gqv)
 	;;
 show-option:-sqv)
 	case $3 in
-	*@tmux-agents-status-state-%9) printf 'v1|%s|11111111-1111-4111-8111-111111111111|failed|44444444-4444-4444-8444-444444444444\n' "$FAKE_OWNER" ;;
-	*@tmux-agents-status-state-%10) printf 'v1|%s|11111111-1111-4111-8111-111111111111|completed|33333333-3333-4333-8333-333333333333\n' "$FAKE_OWNER" ;;
+	*@tmux-agents-status-state-%9) printf 'v2|11111111-1111-4111-8111-111111111111|pid:%s|-|failed|g:44444444444444444444444444444444|-|-\n' "$FAKE_OWNER" ;;
+	*@tmux-agents-status-state-%10) printf 'v2|11111111-1111-4111-8111-111111111111|pid:%s|-|completed|g:33333333333333333333333333333333|-|-\n' "$FAKE_OWNER" ;;
 	*@tmux-agents-status-ack-*) : ;;
 	*) exit 1 ;;
 	esac

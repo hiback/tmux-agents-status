@@ -43,7 +43,22 @@ if ! tas_read_state "$pane"; then
 fi
 [ "$tas_state" != running ] && [ "$tas_unread" = true ] || exit 0
 
-tmux set-option -s "@tmux-agents-status-ack-$pane" "$tas_generation" >/dev/null 2>&1 || {
+state_option=@tmux-agents-status-state-$pane
+ack_option=@tmux-agents-status-ack-$pane
+condition="#{==:#{${state_option}},$tas_record}"
+command="set-option -s $ack_option $tas_generation ; display-message -p TAS_CHANGED"
+changed=$(tmux if-shell -F "$condition" "$command" '' 2>/dev/null) || {
+	diagnose write
+	exit 0
+}
+[ "$changed" = TAS_CHANGED ] || exit 0
+persisted=$(tmux show-option -sqv "$ack_option" 2>/dev/null && printf x) || {
+	diagnose query
+	exit 0
+}
+persisted=${persisted%x}
+persisted=${persisted%"$tas_newline"}
+[ "$persisted" = "$tas_generation" ] || {
 	diagnose write
 	exit 0
 }

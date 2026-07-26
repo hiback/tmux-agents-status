@@ -1,0 +1,304 @@
+#!/bin/sh
+set -u
+
+operation=${2-state}
+diagnose() {
+	printf 'tmux-agents-status: state-core: %s failed\n' "$operation" >&2
+}
+
+[ "${TMUX-}" ] || exit 0
+pane=${TMUX_PANE-}
+case $pane in %[0-9]*) case ${pane#%} in *[!0-9]*) exit 0 ;; esac ;; *) exit 0 ;; esac
+[ "$#" -ge 2 ] || exit 0
+[ "$1" = 2 ] || exit 0
+shift
+operation=$1
+shift
+case $operation in
+claim | start | wait-open | wait-close | finish | dismiss-terminal | release) ;;
+*) exit 0 ;;
+esac
+
+root=$(CDPATH= cd "$(dirname "$0" 2>/dev/null)" && pwd -P) || {
+	diagnose
+	exit 1
+}
+# shellcheck source=state.sh
+. "$root/state.sh" || {
+	diagnose
+	exit 1
+}
+tas_load_schema
+state_option=@tmux-agents-status-state-$pane
+ack_option=@tmux-agents-status-ack-$pane
+
+refresh_clients() {
+	"$root/refresh-clients" state-core
+}
+
+read_raw() {
+	tas_read_stored_record "$pane"
+}
+
+load_owned() {
+	expected_owner=$1
+	if ! read_raw; then
+		if [ "$tas_error" = query ]; then
+			diagnose
+			exit 1
+		fi
+		return 1
+	fi
+	tas_parse_record "$tas_record" || return 1
+	[ "$tas_owner" = "$expected_owner" ] || return 1
+	return 0
+}
+
+pane_is_active() {
+	active_panes=$(tmux list-clients -F '#{pane_id}' 2>/dev/null) || return 1
+	[ -n "$active_panes" ] || return 1
+	while IFS= read -r active_pane; do
+		[ "$active_pane" != "$pane" ] || return 0
+	done <<EOF
+$active_panes
+EOF
+	return 1
+}
+
+new_generation() {
+	random=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || return 1
+	printf '%s\n' "$random" | grep -Eq '^[0-9a-f]{32}$' 2>/dev/null || return 1
+	tas_new_generation=g:$random
+}
+
+# The marker is captured by this process and never reaches the agent. A
+# compare-and-set and all writes execute in one tmux command queue.
+run_queue() {
+	condition=$1
+	commands=$2
+	expected=$3
+	should_refresh=$4
+	marker=$(tmux if-shell -F "$condition" "$commands ; display-message -p TAS_CHANGED" '' 2>/dev/null) || {
+		diagnose
+		return 1
+	}
+	[ "$marker" = TAS_CHANGED ] || return 0
+	persisted=$(tmux show-option -sqv "$state_option" 2>/dev/null && printf x) || {
+		diagnose
+		return 1
+	}
+	persisted=${persisted%x}
+	persisted=${persisted%"$tas_newline"}
+	[ "$persisted" = "$expected" ] || return 0
+	if [ "$should_refresh" = true ]; then
+		refresh_clients
+	fi
+	return 0
+}
+
+ack_commands() {
+	generation=$1
+	if [ "$generation" = keep ]; then
+		tas_ack_commands=
+	elif [ "$generation" != - ] && pane_is_active; then
+		tas_ack_commands="set-option -s $ack_option $generation"
+	else
+		tas_ack_commands="set-option -su $ack_option"
+	fi
+}
+
+append_ack_command() {
+	[ -z "$tas_ack_commands" ] || tas_queue_commands="$tas_queue_commands ; $tas_ack_commands"
+}
+
+write_unconditional() {
+	new_record=$1
+	ack_generation=$2
+	should_refresh=$3
+	ack_commands "$ack_generation"
+	condition='1'
+	tas_queue_commands="set-option -s $state_option $new_record"
+	append_ack_command
+	run_queue "$condition" "$tas_queue_commands" "$new_record" "$should_refresh"
+}
+
+write_current() {
+	old_record=$1
+	new_record=$2
+	ack_generation=$3
+	should_refresh=$4
+	ack_commands "$ack_generation"
+	condition="#{==:#{${state_option}},$old_record}"
+	tas_queue_commands="set-option -s $state_option $new_record"
+	append_ack_command
+	run_queue "$condition" "$tas_queue_commands" "$new_record" "$should_refresh"
+}
+
+clear_current() {
+	old_record=$1
+	should_refresh=$2
+	condition="#{==:#{${state_option}},$old_record}"
+	commands="set-option -su $state_option ; set-option -su $ack_option"
+	run_queue "$condition" "$commands" '' "$should_refresh"
+}
+
+turn_matches() {
+	supplied_turn=$1
+	[ "$supplied_turn" = - ] && return 0
+	[ "$tas_turn" = - ] || [ "$tas_turn" = "$supplied_turn" ]
+}
+
+case $operation in
+claim)
+	[ "$#" -eq 2 ] || exit 0
+	owner=$1
+	liveness=$2
+	tas_valid_identifier "$owner" && tas_valid_liveness "$liveness" || exit 0
+	refresh=false
+	if read_raw; then
+		if tas_parse_record "$tas_record"; then
+			[ "$tas_owner" != "$owner" ] || exit 0
+			[ "$tas_state" = none ] || refresh=true
+		fi
+	elif [ "$tas_error" = query ]; then
+		diagnose
+		exit 1
+	fi
+	new_record=v2\|$owner\|$liveness\|-\|none\|-\|-\|-
+	write_unconditional "$new_record" - "$refresh"
+	;;
+start)
+	[ "$#" -eq 2 ] || exit 0
+	owner=$1
+	turn=$2
+	tas_valid_identifier "$owner" && tas_valid_identifier "$turn" || exit 0
+	load_owned "$owner" || exit 0
+	old_record=$tas_record
+	if [ "$tas_turn" = "$turn" ]; then
+		[ "$tas_state" != running ] || exit 0
+		case $tas_state in completed | failed) exit 0 ;; esac
+	fi
+	new_record=v2\|$owner\|$tas_liveness\|$turn\|running\|-\|-\|-
+	write_current "$old_record" "$new_record" - true
+	;;
+wait-open)
+	[ "$#" -eq 3 ] || exit 0
+	owner=$1
+	turn=$2
+	request=$3
+	tas_valid_identifier "$owner" && tas_valid_optional_identifier "$turn" && tas_valid_identifier "$request" || exit 0
+	load_owned "$owner" || exit 0
+	old_record=$tas_record
+	turn_matches "$turn" || exit 0
+	case $tas_state in completed | failed) exit 0 ;; esac
+	next_turn=$tas_turn
+	[ "$turn" = - ] || next_turn=$turn
+	case $tas_state in
+	waiting)
+		case ,$tas_requests, in *,$request,*) exit 0 ;; esac
+		requests=$(printf '%s\n%s\n' "$tas_requests" "$request" | tr ',' '\n' | sort -u | paste -sd, -) || {
+			diagnose
+			exit 1
+		}
+		tas_valid_requests "$requests" || exit 0
+		new_record=v2\|$owner\|$tas_liveness\|$next_turn\|waiting\|$tas_generation\|$tas_resume\|$requests
+		write_current "$old_record" "$new_record" keep false
+		;;
+	none | running)
+		new_generation || {
+			diagnose
+			exit 1
+		}
+		resume=$tas_state
+		new_record=v2\|$owner\|$tas_liveness\|$next_turn\|waiting\|$tas_new_generation\|$resume\|$request
+		write_current "$old_record" "$new_record" "$tas_new_generation" true
+		;;
+	esac
+	;;
+wait-close)
+	[ "$#" -eq 3 ] || exit 0
+	owner=$1
+	turn=$2
+	request=$3
+	tas_valid_identifier "$owner" && tas_valid_optional_identifier "$turn" && tas_valid_identifier "$request" || exit 0
+	load_owned "$owner" || exit 0
+	[ "$tas_state" = waiting ] && turn_matches "$turn" || exit 0
+	old_record=$tas_record
+	case ,$tas_requests, in *,$request,*) ;; *) exit 0 ;; esac
+	requests=$(printf '%s\n' "$tas_requests" | tr ',' '\n' | awk -v request="$request" '$0 != request' | paste -sd, -) || {
+		diagnose
+		exit 1
+	}
+	if [ -n "$requests" ]; then
+		new_record=v2\|$owner\|$tas_liveness\|$tas_turn\|waiting\|$tas_generation\|$tas_resume\|$requests
+		write_current "$old_record" "$new_record" keep false
+	else
+		new_record=v2\|$owner\|$tas_liveness\|$tas_turn\|$tas_resume\|-\|-\|-
+		write_current "$old_record" "$new_record" - true
+	fi
+	;;
+finish)
+	[ "$#" -eq 3 ] || exit 0
+	owner=$1
+	turn=$2
+	outcome=$3
+	tas_valid_identifier "$owner" && tas_valid_optional_identifier "$turn" || exit 0
+	case $outcome in completed | failed) ;; *) exit 0 ;; esac
+	load_owned "$owner" || exit 0
+	turn_matches "$turn" || exit 0
+	old_record=$tas_record
+	next_turn=$tas_turn
+	[ "$turn" = - ] || next_turn=$turn
+	case $tas_state in
+	completed | failed) exit 0 ;;
+	esac
+	new_generation || {
+		diagnose
+		exit 1
+	}
+	new_record=v2\|$owner\|$tas_liveness\|$next_turn\|$outcome\|$tas_new_generation\|-\|-
+	write_current "$old_record" "$new_record" "$tas_new_generation" true
+	;;
+dismiss-terminal)
+	[ "$#" -eq 1 ] || exit 0
+	owner=$1
+	tas_valid_identifier "$owner" || exit 0
+	load_owned "$owner" || exit 0
+	case $tas_state in completed | failed) ;; *) exit 0 ;; esac
+	old_record=$tas_record
+	new_record=v2\|$owner\|$tas_liveness\|$tas_turn\|none\|-\|-\|-
+	write_current "$old_record" "$new_record" - true
+	;;
+release)
+	[ "$#" -eq 2 ] || exit 0
+	owner=$1
+	reason=$2
+	tas_valid_identifier "$owner" || exit 0
+	case $reason in interrupted | clear) ;; *) exit 0 ;; esac
+	load_owned "$owner" || exit 0
+	old_record=$tas_record
+	if [ "$reason" = clear ]; then
+		case $tas_state in none) refresh=false ;; *) refresh=true ;; esac
+		clear_current "$old_record" "$refresh"
+		exit $?
+	fi
+	case $tas_state in
+	running | waiting)
+		new_generation || {
+			diagnose
+			exit 1
+		}
+		new_record=v2\|-\|-\|$tas_turn\|failed\|$tas_new_generation\|-\|-
+		write_current "$old_record" "$new_record" "$tas_new_generation" true
+		;;
+	completed | failed)
+		new_record=v2\|-\|-\|$tas_turn\|$tas_state\|$tas_generation\|-\|-
+		write_current "$old_record" "$new_record" keep false
+		;;
+	none) clear_current "$old_record" false ;;
+	esac
+	;;
+*) exit 0 ;;
+esac
+core_status=$?
+exit "$core_status"

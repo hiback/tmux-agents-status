@@ -1,0 +1,12 @@
+{
+  "name": "tmux-agents-status-pi",
+  "version": "0.1.0",
+  "description": "Pi lifecycle adapter for tmux-agents-status",
+  "type": "module",
+  "keywords": ["pi-package", "tmux", "coding-agent"],
+  "files": ["tmux-agents-status.ts"],
+  "pi": {
+    "extensions": ["./tmux-agents-status.ts"]
+  },
+  "license": "MIT"
+}

@@ -34,7 +34,7 @@ show-option:-sqv)
 	case $3 in
 	*@tmux-agents-status-state-%1)
 		[ "${FAKE_FAIL-}" != state ] || exit 1
-		printf 'v1|%s|11111111-1111-4111-8111-111111111111|failed|22222222-2222-4222-8222-222222222222\n' "$FAKE_OWNER"
+		printf 'v2|11111111-1111-4111-8111-111111111111|pid:%s|-|failed|g:22222222222222222222222222222222|-|-\n' "$FAKE_OWNER"
 		;;
 	*@tmux-agents-status-state-%2)
 		if [ "${FAKE_BAD_RECORD+x}" = x ]; then
@@ -131,22 +131,26 @@ assert_renderer '#[default] F' '' 'window renderer isolates malformed and unknow
 	"$root/scripts/render-window" "\$0" '@1' '%1'
 assert_renderer '#[default]other:F ' '' 'other renderer isolates malformed and unknown sibling state' \
 	"$root/scripts/render-other-sessions" "\$0"
-generation=22222222-2222-4222-8222-222222222222
+generation=g:22222222222222222222222222222222
 incarnation=11111111-1111-4111-8111-111111111111
 for invalid_record in \
-	"v2|$$|$incarnation|failed|$generation" \
-	"v1|$$|$incarnation|failed|$generation|extra" \
-	"v1|0|$incarnation|running|-" \
-	"v1|01|$incarnation|running|-" \
-	"v1|pid|$incarnation|running|-" \
-	"v1|$$|short|running|-" \
-	"v1|$$|$incarnation|unknown|$generation" \
-	"v1|$$|$incarnation|running|$generation" \
-	"v1|$$|$incarnation|failed|-" \
-	"v1|$$|$incarnation|failed|dead-$incarnation"; do
+	"v1|$$|$incarnation|failed|$generation" \
+	"v3|$incarnation|pid:$$|-|failed|$generation|-|-" \
+	"v2|$incarnation|pid:$$|-|failed|$generation|-|-|extra" \
+	"v2|-|pid:$$|-|running|-|-|-" \
+	"v2|$incarnation|pid:0|-|running|-|-|-" \
+	"v2|$incarnation|pid:01|-|running|-|-|-" \
+	"v2|$incarnation|pid:$$|bad turn|running|-|-|-" \
+	"v2|$incarnation|pid:$$|-|unknown|$generation|-|-" \
+	"v2|$incarnation|pid:$$|-|running|$generation|-|-" \
+	"v2|$incarnation|pid:$$|-|failed|-|-|-" \
+	"v2|$incarnation|pid:$$|-|waiting|$generation|running|b,a"; do
 	assert_renderer '#[default] F' '' 'strict records omit one invalid sibling' \
 		env FAKE_BAD_RECORD="$invalid_record" "$root/scripts/render-window" "\$0" '@1' '%1'
 done
+oversized=$(awk 'BEGIN { printf "v2|"; for (i = 0; i < 2050; i++) printf "a" }')
+assert_renderer '#[default] F' '' 'oversized records are omitted without hiding valid siblings' \
+	env FAKE_BAD_RECORD="$oversized" "$root/scripts/render-window" "\$0" '@1' '%1'
 assert_renderer '' 'tmux-agents-status: render-window: required query failed' 'window required option failure degrades safely' \
 	env FAKE_FAIL=option "$root/scripts/render-window" "\$0" '@1' '%1'
 assert_renderer '' 'tmux-agents-status: render-window: required query failed' 'window topology failure degrades safely' \
@@ -210,11 +214,12 @@ show-option:-sqv)
 		acknowledge-state-query) exit 1 ;;
 		acknowledge-absent) : ;;
 		acknowledge-invalid) printf 'v1|raw-secret\ninjected-secret\n' ;;
-		*) printf 'v1|%s|11111111-1111-4111-8111-111111111111|failed|22222222-2222-4222-8222-222222222222\n' "$FAKE_OWNER" ;;
+		*) printf 'v2|11111111-1111-4111-8111-111111111111|pid:%s|-|failed|g:22222222222222222222222222222222|-|-\n' "$FAKE_OWNER" ;;
 		esac
 		;;
 	@tmux-agents-status-ack-%42)
 		[ "${FAKE_MODE-}" != acknowledge-ack-query ] || exit 1
+		[ ! -s "$FAKE_TMUX_LOG.ack" ] || cat "$FAKE_TMUX_LOG.ack"
 		;;
 	*) exit 1 ;;
 	esac
@@ -237,9 +242,14 @@ show-options:-s)
 	*) printf '@tmux-agents-status-state-%%99 value\n@tmux-agents-status-ack-%%99 value\n' ;;
 	esac
 	;;
+if-shell:-F)
+	[ "${FAKE_MODE-}" != acknowledge-write ] || exit 1
+	printf 'g:22222222222222222222222222222222\n' >"$FAKE_TMUX_LOG.ack"
+	printf 'TAS_CHANGED\n'
+	;;
 set-option:-s)
 	case ${FAKE_MODE-} in
-	acknowledge-write | cleanup-pane-write | cleanup-stale-write | cleanup-stale-partial) exit 1 ;;
+	cleanup-pane-write | cleanup-stale-write | cleanup-stale-partial) exit 1 ;;
 	esac
 	;;
 set-option:-su)
@@ -266,6 +276,7 @@ run_boundary() {
 	label=$2
 	shift 2
 	: >"$tmp/calls"
+	rm -f "$tmp/calls.ack"
 	if ! PATH="$tmp/bin:$PATH" FAKE_TMUX_LOG="$tmp/calls" FAKE_OWNER=$$ "$@" >"$tmp/stdout" 2>"$tmp/stderr"; then
 		fail "$label exits success"
 	fi
@@ -283,13 +294,13 @@ run_boundary 'tmux-agents-status: acknowledge: query failed' 'acknowledgement st
 	env FAKE_MODE=acknowledge-state-query "$root/scripts/acknowledge" '%42'
 run_boundary 'tmux-agents-status: acknowledge: query failed' 'acknowledgement ack query failure is diagnosed without rewriting unread state' \
 	env FAKE_MODE=acknowledge-ack-query "$root/scripts/acknowledge" '%42'
-if grep -q '<set-option>' "$tmp/calls"; then fail 'acknowledgement query failure performs no write'; fi
+if grep -q '<if-shell>' "$tmp/calls"; then fail 'acknowledgement query failure performs no write'; fi
 run_boundary 'tmux-agents-status: acknowledge: write failed' 'acknowledgement write failure is diagnosed' \
 	env FAKE_MODE=acknowledge-write "$root/scripts/acknowledge" '%42'
 if grep -q '<refresh-client>' "$tmp/calls"; then fail 'acknowledgement does not refresh after failed persistence'; fi
 run_boundary 'tmux-agents-status: acknowledge: query failed' 'post-write client query failure is diagnosed' \
 	env FAKE_MODE=acknowledge-clients "$root/scripts/acknowledge" '%42'
-grep -q '<set-option><-s><@tmux-agents-status-ack-%42>' "$tmp/calls" || fail 'acknowledgement remains persisted after client query failure'
+grep -q 'set-option -s @tmux-agents-status-ack-%42 g:22222222222222222222222222222222' "$tmp/calls" || fail 'acknowledgement remains persisted after client query failure'
 run_boundary 'tmux-agents-status: acknowledge: refresh failed' 'acknowledgement refresh failure is diagnosed' \
 	env FAKE_MODE=acknowledge-refresh "$root/scripts/acknowledge" '%42'
 run_boundary '' 'absent acknowledgement state remains silent' \

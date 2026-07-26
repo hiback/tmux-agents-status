@@ -7,13 +7,19 @@ const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const socket = `tmux-agents-status-lifecycle-${process.pid}`;
 const tmux = (...args) =>
 	execFileSync("tmux", ["-L", socket, ...args], { encoding: "utf8" });
-const uuid = (digit) =>
-	`${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`;
 
 try {
 	tmux("-f", "/dev/null", "new-session", "-d", "-s", "lifecycle");
+	tmux("run-shell", `${root}/tmux-agents-status.tmux`);
 	const pane = tmux("display-message", "-p", "#{pane_id}").trim();
 	const socketPath = tmux("display-message", "-p", "#{socket_path}").trim();
+	const [session, window] = tmux(
+		"display-message",
+		"-p",
+		"#{session_id} #{window_id}",
+	)
+		.trim()
+		.split(" ");
 	process.env.TMUX = `${socketPath},${process.pid},0`;
 	process.env.TMUX_PANE = pane;
 
@@ -46,37 +52,55 @@ try {
 	};
 	const option = (kind) =>
 		tmux("show-option", "-sqv", `@tmux-agents-status-${kind}-${pane}`).trim();
+	const render = () =>
+		execFileSync(`${root}/scripts/render-window`, [session, window, pane], {
+			encoding: "utf8",
+			env: process.env,
+		});
 	const extension = (
-		await import(new URL("../pi/tmux-agents-status.ts", import.meta.url).href)
+		await import(
+			new URL("../packages/pi/tmux-agents-status.ts", import.meta.url).href
+		)
 	).default;
-	const sessionContext = (sessionId) => ({
+	const tui = {
 		mode: "tui",
-		stale: false,
-		sessionManager: { getSessionId: () => sessionId },
-		isIdle() {
-			if (this.stale) throw new Error("stale after session replacement");
-			return true;
-		},
+		sessionManager: { getSessionId: () => "session-1" },
+		isIdle: () => true,
+	};
+	const assistant = (stopReason) => ({
+		message: { role: "assistant", stopReason },
 	});
-	const tui = sessionContext("session-0");
 
-	const oldGeneration = uuid("2");
-	tmux(
-		"set-option",
-		"-s",
-		`@tmux-agents-status-state-${pane}`,
-		`v1|99|${uuid("1")}|completed|${oldGeneration}`,
-	);
-	tmux("set-option", "-s", `@tmux-agents-status-ack-${pane}`, oldGeneration);
 	extension(api);
 	await handlers.get("session_start")({ reason: "startup" }, tui);
-	assert.equal(option("state"), "");
-	assert.equal(option("ack"), "");
-
+	assert.match(option("state"), /^v2\|pi:[^|]+\|pid:[0-9]+\|-\|none\|-\|-\|-$/);
+	const owner = option("state").split("|")[1];
 	await handlers.get("agent_start")({}, tui);
 	const running = option("state");
-	assert.match(running, /\|running\|-$/);
-	const incarnation = running.split("|")[2];
+	assert.match(
+		running,
+		new RegExp(
+			`^v2\\|${owner}\\|pid:${process.pid}\\|turn:[^|]+\\|running\\|-\\|-\\|-$`,
+		),
+	);
+	assert.equal(render(), "#[default] R\n");
+	const turn = running.split("|")[3];
+
+	// A retry and queued continuation remain within the accepted turn. Only the
+	// latest structural outcome is classified at final settlement.
+	await handlers.get("message_end")(assistant("error"), tui);
+	await handlers.get("agent_start")({}, tui);
+	assert.equal(option("state"), running);
+	await handlers.get("message_end")(assistant("stop"), tui);
+	await handlers.get("agent_settled")({}, tui);
+	const completed = option("state");
+	assert.match(
+		completed,
+		new RegExp(
+			`^v2\\|${owner}\\|pid:${process.pid}\\|${turn}\\|completed\\|g:[0-9a-f]{32}\\|-\\|-$`,
+		),
+	);
+	assert.equal(render(), "#[default] #[reverse]C#[default]\n");
 
 	await handlers.get("session_shutdown")({ reason: "reload" }, tui);
 	const reloadHandlers = new Map();
@@ -84,161 +108,51 @@ try {
 		...api,
 		on: (event, handler) => reloadHandlers.set(event, handler),
 	});
-	await handlers.get("session_shutdown")({ reason: "quit" }, tui);
-	await handlers.get("session_start")({ reason: "startup" }, tui);
-	await handlers.get("agent_start")({}, tui);
-	await handlers.get("message_end")(
-		{ message: { role: "assistant", stopReason: "stop" } },
-		tui,
-	);
-	await handlers.get("agent_settled")({}, tui);
-	assert.equal(option("state"), running, "replaced handlers must be inert");
-	assert.equal(option("ack"), "");
-
 	await reloadHandlers.get("session_start")({ reason: "reload" }, tui);
-	assert.equal(option("state"), running);
-	assert.equal(option("state").split("|")[2], incarnation);
+	assert.equal(
+		option("state"),
+		completed,
+		"reload preserves terminal state and ownership",
+	);
+
+	await reloadHandlers.get("session_shutdown")({ reason: "new" }, tui);
+	assert.equal(option("state"), "");
+	const replacementContext = {
+		...tui,
+		sessionManager: { getSessionId: () => "session-2" },
+	};
+	await reloadHandlers.get("session_start")(
+		{ reason: "new" },
+		replacementContext,
+	);
+	const replacement = option("state");
+	assert.match(replacement, /^v2\|pi:[^|]+\|pid:[0-9]+\|-\|none\|-\|-\|-$/);
+	assert.notEqual(replacement.split("|")[1], owner);
+
+	await reloadHandlers.get("agent_start")({}, replacementContext);
 	await reloadHandlers.get("message_end")(
-		{ message: { role: "assistant", stopReason: "stop" } },
-		tui,
+		assistant("aborted"),
+		replacementContext,
 	);
-	await reloadHandlers.get("agent_settled")({}, tui);
-	const completed = option("state");
-	const completedAck = option("ack");
-	assert.match(completed, /\|completed\|[0-9a-f-]{36}$/);
-	await reloadHandlers.get("session_shutdown")({ reason: "reload" }, tui);
-	const terminalReloadHandlers = new Map();
-	extension({
-		...api,
-		on: (event, handler) => terminalReloadHandlers.set(event, handler),
-	});
-	await terminalReloadHandlers.get("session_start")({ reason: "reload" }, tui);
-	assert.equal(option("state"), completed);
-	assert.equal(option("ack"), completedAck);
-
-	let activeHandlers = terminalReloadHandlers;
-	let activeContext = tui;
-	for (const reason of ["new", "resume", "fork"]) {
-		await activeHandlers.get("session_shutdown")({ reason }, activeContext);
-		activeContext.stale = true;
-		const replacedHandlers = activeHandlers;
-		const replacedContext = activeContext;
-		const nextContext = sessionContext(`session-${reason}`);
-		const nextHandlers = new Map();
-		extension({
-			...api,
-			on: (event, handler) => nextHandlers.set(event, handler),
-		});
-		await replacedHandlers.get("session_start")(
-			{ reason: "startup" },
-			replacedContext,
-		);
-		await replacedHandlers.get("agent_start")({}, replacedContext);
-		assert.equal(option("state"), "", "replaced context must stay empty");
-		await nextHandlers.get("session_start")({ reason }, nextContext);
-		assert.equal(option("state"), "");
-		assert.equal(option("ack"), "");
-		await nextHandlers.get("agent_start")({}, nextContext);
-		assert.equal(option("state").split("|")[2], incarnation);
-		activeHandlers = nextHandlers;
-		activeContext = nextContext;
-	}
-
-	await activeHandlers.get("session_shutdown")(
+	await reloadHandlers.get("agent_settled")({}, replacementContext);
+	assert.match(option("state"), /\|failed\|g:[0-9a-f]{32}\|-\|-$/);
+	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	await reloadHandlers.get("session_shutdown")(
 		{ reason: "quit" },
-		activeContext,
+		replacementContext,
 	);
-	const failed = option("state");
-	assert.match(failed, /\|failed\|[0-9a-f-]{36}$/);
-
-	const waitingHandlers = new Map();
-	extension({
-		...api,
-		on: (event, handler) => waitingHandlers.set(event, handler),
-	});
-	await waitingHandlers.get("session_start")(
-		{ reason: "startup" },
-		activeContext,
-	);
-	await waitingHandlers.get("agent_start")({}, activeContext);
-	tmux(
-		"set-option",
-		"-s",
-		`@tmux-agents-status-state-${pane}`,
-		`v1|${process.pid}|${incarnation}|waiting|${uuid("6")}`,
-	);
-	await waitingHandlers.get("session_shutdown")(
-		{ reason: "quit" },
-		activeContext,
-	);
-	assert.match(option("state"), /\|failed\|[0-9a-f-]{36}$/);
-
-	const replacement = `v1|88|${uuid("3")}|running|-`;
-	tmux("set-option", "-s", `@tmux-agents-status-state-${pane}`, replacement);
-	await waitingHandlers.get("agent_start")({}, activeContext);
-	await waitingHandlers.get("session_shutdown")(
-		{ reason: "quit" },
-		activeContext,
-	);
-	assert.equal(option("state"), replacement);
-
-	tmux("set-option", "-su", `@tmux-agents-status-state-${pane}`);
-	const absentHandlers = new Map();
-	extension({
-		...api,
-		on: (event, handler) => absentHandlers.set(event, handler),
-	});
-	await absentHandlers.get("session_start")({ reason: "new" }, activeContext);
-	await absentHandlers.get("agent_start")({}, activeContext);
 	assert.equal(
 		option("state"),
 		"",
-		"absence after lost ownership must not authorize creation",
+		"graceful idle quit clears terminal ownership",
 	);
-
-	const idleHandlers = new Map();
-	extension({
-		...api,
-		on: (event, handler) => idleHandlers.set(event, handler),
-	});
-	await idleHandlers.get("session_start")({ reason: "startup" }, activeContext);
-	await idleHandlers.get("agent_start")({}, activeContext);
-	await idleHandlers.get("message_end")(
-		{ message: { role: "assistant", stopReason: "stop" } },
-		activeContext,
-	);
-	await idleHandlers.get("agent_settled")({}, activeContext);
-	await idleHandlers.get("session_shutdown")({ reason: "quit" }, activeContext);
-	assert.equal(option("state"), "");
 	assert.equal(option("ack"), "");
-
-	const deadGeneration = uuid("4");
-	tmux(
-		"set-option",
-		"-s",
-		`@tmux-agents-status-state-${pane}`,
-		`v1|99999999|${uuid("5")}|failed|${deadGeneration}`,
-	);
-	tmux("set-option", "-su", `@tmux-agents-status-ack-${pane}`);
-	const [session, window] = tmux(
-		"display-message",
-		"-p",
-		"#{session_id} #{window_id}",
-	)
-		.trim()
-		.split(" ");
-	const render = () =>
-		execFileSync(`${root}/scripts/render-window`, [session, window, pane], {
-			encoding: "utf8",
-			env: process.env,
-		});
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
-	tmux("set-option", "-s", `@tmux-agents-status-ack-${pane}`, deadGeneration);
-	assert.equal(render(), "\n");
 } finally {
 	try {
 		tmux("kill-server");
 	} catch {}
 }
 
-console.log("ok - isolated tmux observes Pi lifecycle ownership transitions");
+console.log(
+	"ok - native Pi events reach rendered v2 status through the shared core",
+);

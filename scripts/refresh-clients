@@ -1,0 +1,17 @@
+#!/bin/sh
+set -u
+
+operation=${1-refresh}
+case $operation in *[!A-Za-z0-9_-]* | '') operation=refresh ;; esac
+clients=$(tmux list-clients -F '#{client_name}' 2>/dev/null) || {
+	printf 'tmux-agents-status: %s: refresh failed\n' "$operation" >&2
+	exit 0
+}
+failed=false
+while IFS= read -r client; do
+	[ -n "$client" ] || continue
+	tmux refresh-client -S -t "$client" >/dev/null 2>&1 || failed=true
+done <<EOF
+$clients
+EOF
+[ "$failed" = false ] || printf 'tmux-agents-status: %s: refresh failed\n' "$operation" >&2

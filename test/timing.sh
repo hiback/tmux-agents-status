@@ -63,8 +63,8 @@ tmux_test set-option -g 'status-format[0]' 'TAS[#{E:@tmux-agents-status-window}]
 # A nested tmux client supplies a real portable PTY on every supported tmux.
 # Capturing its screen observes the installed fragment through tmux's #() cache.
 incarnation=11111111-1111-4111-8111-111111111111
-generation=22222222-2222-4222-8222-222222222222
-tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|running|-"
+generation=g:22222222222222222222222222222222
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "v2|$incarnation|pid:$$|-|running|-|-|-"
 observer_pane=$(tmux_test new-session -d -s timing-observer -x 80 -y 24 -P -F '#{pane_id}' \
 	"TMUX= TERM=xterm tmux -L '$socket' attach-session -t timing")
 bound_ms=1500
@@ -85,7 +85,7 @@ tmux_test select-pane -t "$away_pane"
 max_elapsed=0
 
 started=$(now_ms)
-tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|running|-"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "v2|$incarnation|pid:$$|-|running|-|-|-"
 tmux_test refresh-client -S -t "$status_client"
 wait_for_status 'TAS[ R]SAT' "$started" 'event-driven running state'
 
@@ -93,7 +93,7 @@ wait_for_status 'TAS[ R]SAT' "$started" 'event-driven running state'
 # and requests another status-only refresh without interval polling.
 reverse_w=$(printf '\033[7mW')
 started=$(now_ms)
-tmux_test set-option -s "@tmux-agents-status-state-$pane" "v1|$$|$incarnation|waiting|$generation"
+tmux_test set-option -s "@tmux-agents-status-state-$pane" "v2|$incarnation|pid:$$|-|waiting|$generation|running|request"
 tmux_test refresh-client -S -t "$status_client"
 wait_for_status "TAS[ $reverse_w" "$started" 'event-driven unread state'
 started=$(now_ms)

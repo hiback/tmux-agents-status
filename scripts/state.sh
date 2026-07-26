@@ -1,4 +1,54 @@
-# Private shared state parser and presenter for status renderers.
+# Private strict-v2 state parser and presenter for the shared core and renderers.
+
+# All persisted identifiers are deliberately bounded ASCII tokens. This keeps
+# records safe to pass through tmux formats without evaluating stored content.
+tas_valid_identifier() {
+	[ "${#1}" -le 96 ] || return 1
+	printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$' 2>/dev/null
+}
+
+tas_valid_optional_identifier() {
+	[ "$1" = - ] || tas_valid_identifier "$1"
+}
+
+tas_valid_liveness() {
+	[ "$1" = - ] && return 0
+	printf '%s\n' "$1" | grep -Eq '^pid:[1-9][0-9]{0,9}$' 2>/dev/null
+}
+
+tas_valid_generation() {
+	printf '%s\n' "$1" | grep -Eq '^g:[0-9a-f]{32}$' 2>/dev/null
+}
+
+tas_valid_effective_generation() {
+	tas_valid_generation "$1" && return 0
+	case $1 in
+	d:*) tas_valid_identifier "${1#d:}" ;;
+	*) return 1 ;;
+	esac
+}
+
+tas_valid_requests() {
+	[ "$1" != - ] || return 1
+	[ "${#1}" -le 1551 ] || return 1
+	printf '%s\n' "$1" | awk -F, '
+		NF < 1 || NF > 16 { exit 1 }
+		{
+			for (i = 1; i <= NF; i++) {
+				if (length($i) > 96 || $i !~ /^[A-Za-z0-9][A-Za-z0-9._:-]*$/) exit 1
+				if (i > 1 && previous >= $i) exit 1
+				previous = $i
+			}
+		}
+	' >/dev/null 2>&1
+}
+
+tas_load_schema() {
+	LC_ALL=C
+	export LC_ALL
+	tas_newline='
+'
+}
 
 tas_read_option() {
 	tas_option=$(tmux show-option -gqv "$1" 2>/dev/null && printf x) || return 1
@@ -11,12 +61,6 @@ tas_read_option() {
 	*'
 '*) return 1 ;;
 	esac
-}
-
-tas_load_schema() {
-	tas_uuid='[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}'
-	tas_newline='
-'
 }
 
 tas_load_options() {
@@ -41,7 +85,7 @@ tas_load_options() {
 	tas_unread_style=$tas_option
 }
 
-tas_read_state() {
+tas_read_stored_record() {
 	tas_error=
 	tas_pane=$1
 	tas_record=$(tmux show-option -sqv "@tmux-agents-status-state-$tas_pane" 2>/dev/null && printf x) || {
@@ -54,38 +98,83 @@ tas_read_state() {
 	*'
 '*) return 1 ;;
 	esac
-	printf '%s\n' "$tas_record" | grep -Eq "^v1\\|[1-9][0-9]*\\|$tas_uuid\\|(running\\|-|(waiting|completed|failed)\\|$tas_uuid)$" 2>/dev/null
-	case $? in
-	0) ;;
-	1) return 1 ;;
-	*)
+	[ -n "$tas_record" ] || return 1
+	[ "${#tas_record}" -le 2048 ] || return 1
+}
+
+tas_parse_record() {
+	[ "${#1}" -le 2048 ] || return 1
+	case $1 in *'
+'*) return 1 ;; esac
+	printf '%s\n' "$1" | awk -F '|' 'NF == 8 { found = 1 } END { exit !found }' >/dev/null 2>&1 || return 1
+	IFS='|' read -r tas_version tas_owner tas_liveness tas_turn tas_state tas_generation tas_resume tas_requests <<EOF
+$1
+EOF
+	[ "$tas_version" = v2 ] || return 1
+	tas_valid_optional_identifier "$tas_turn" || return 1
+	case $tas_state in
+	none | running)
+		tas_valid_identifier "$tas_owner" || return 1
+		tas_valid_liveness "$tas_liveness" || return 1
+		[ "$tas_generation" = - ] && [ "$tas_resume" = - ] && [ "$tas_requests" = - ] || return 1
+		;;
+	waiting)
+		tas_valid_identifier "$tas_owner" || return 1
+		tas_valid_liveness "$tas_liveness" || return 1
+		tas_valid_generation "$tas_generation" || return 1
+		case $tas_resume in none | running) ;; *) return 1 ;; esac
+		tas_valid_requests "$tas_requests" || return 1
+		;;
+	completed | failed)
+		if [ "$tas_owner" = - ]; then
+			[ "$tas_liveness" = - ] || return 1
+		else
+			tas_valid_identifier "$tas_owner" || return 1
+			tas_valid_liveness "$tas_liveness" || return 1
+		fi
+		tas_valid_generation "$tas_generation" || return 1
+		[ "$tas_resume" = - ] && [ "$tas_requests" = - ] || return 1
+		;;
+	*) return 1 ;;
+	esac
+}
+
+tas_read_ack() {
+	tas_ack=$(tmux show-option -sqv "@tmux-agents-status-ack-$tas_pane" 2>/dev/null && printf x) || {
 		tas_error=query
 		return 1
+	}
+	tas_ack=${tas_ack%x}
+	tas_ack=${tas_ack%"$tas_newline"}
+	case $tas_ack in *'
+'*) tas_ack= ;; esac
+	if [ -n "$tas_ack" ] && ! tas_valid_effective_generation "$tas_ack"; then
+		tas_ack=
+	fi
+}
+
+tas_read_state() {
+	tas_load_schema
+	tas_read_stored_record "$1" || return 1
+	tas_parse_record "$tas_record" || return 1
+
+	[ "$tas_state" != none ] || return 1
+	tas_live=true
+	case $tas_liveness in
+	pid:*)
+		tas_pid=${tas_liveness#pid:}
+		kill -0 "$tas_pid" 2>/dev/null || tas_live=false
 		;;
 	esac
-
-	tas_owner=${tas_record#v1|}
-	tas_owner=${tas_owner%%|*}
-	if kill -0 "$tas_owner" 2>/dev/null; then
-		tas_live=true
-	else
-		tas_live=false
-	fi
-
-	tas_fields=${tas_record#*|}
-	tas_fields=${tas_fields#*|}
-	tas_incarnation=${tas_fields%%|*}
-	tas_fields=${tas_fields#*|}
-	tas_state=${tas_fields%%|*}
-	tas_generation=${tas_fields#*|}
 	if [ "$tas_live" = false ]; then
 		case $tas_state in
 		running | waiting)
 			tas_state=failed
-			tas_generation=dead-$tas_incarnation
+			tas_generation=d:$tas_owner
 			;;
 		esac
 	fi
+
 	case $tas_state in
 	running)
 		_tas_glyph=${tas_running_glyph-}
@@ -110,27 +199,10 @@ tas_read_state() {
 	esac
 
 	if [ "$tas_unread" = true ]; then
-		tas_ack=$(tmux show-option -sqv "@tmux-agents-status-ack-$tas_pane" 2>/dev/null && printf x) || {
-			tas_error=query
-			return 1
-		}
-		tas_ack=${tas_ack%x}
-		tas_ack=${tas_ack%"$tas_newline"}
-		case $tas_ack in
-		*'
-'*) tas_ack= ;;
-		esac
-		printf '%s\n' "$tas_ack" | grep -Eq "^($tas_uuid|dead-$tas_uuid)$" 2>/dev/null
-		case $? in
-		0) [ "$tas_ack" != "$tas_generation" ] || tas_unread=false ;;
-		1) ;;
-		*)
-			tas_error=query
-			return 1
-			;;
-		esac
+		tas_read_ack || return 1
+		[ "$tas_ack" != "$tas_generation" ] || tas_unread=false
 	fi
-	[ "$tas_live" = true ] || [ "$tas_unread" = true ]
+	return 0
 }
 
 tas_present_glyph() {
