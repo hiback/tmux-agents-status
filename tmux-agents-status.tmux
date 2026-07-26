@@ -17,12 +17,21 @@ root=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 tmux set-option -g @tmux-agents-status-root "$root"
 tmux set-option -g @tmux-agents-status-protocol 2
 
+global_option_exists() {
+    option=$1
+    options=$(tmux show-options -g 2>/dev/null) || return 1
+    printf '%s\n' "$options" | awk -v option="$option" '
+        $1 == option { found = 1 }
+        END { exit !found }
+    ' >/dev/null 2>&1
+}
+
 install_default() {
     option=$1
     marker=$2
     value=$3
     owned=false
-    if ! tmux show-options -g "$option" >/dev/null 2>&1; then
+    if ! global_option_exists "$option"; then
         owned=true
     fi
     tmux set-option -goq "$option" "$value"

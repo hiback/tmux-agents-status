@@ -55,4 +55,19 @@ tmux_test select-pane -t "$alert_pane" \; wait-for tas-attached-pane-selected
 assert_equal "$alert_pane" "$(tmux_test display-message -p -c "$client" '#{pane_id}')" 'the attached client makes the selected alert pane active'
 assert_equal "$generation" "$(server_option "@tmux-agents-status-ack-$alert_pane")" 'the alert is acknowledged after it becomes active for an attached client'
 
+exec 9>&-
+wait "$client_pid" 2>/dev/null || :
+client_pid=
+attached_generation=g:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+tmux_test set-option -s "@tmux-agents-status-state-$alert_pane" "v2|owner:attachment|pid:$$|-|completed|$attached_generation|-|-"
+tmux_test set-option -su "@tmux-agents-status-ack-$alert_pane"
+tmux_test set-hook -ag client-attached 'wait-for -S tas-active-client-attached'
+active_fifo=$tmp/active-client-input
+mkfifo "$active_fifo"
+tmux -L "$socket" -C attach-session -t attachment <"$active_fifo" >"$tmp/active-client-output" 2>"$tmp/active-client-error" &
+client_pid=$!
+exec 8>"$active_fifo"
+tmux_test wait-for tas-active-client-attached
+assert_equal "$attached_generation" "$(server_option "@tmux-agents-status-ack-$alert_pane")" 'attaching directly to an active alert acknowledges the observed generation'
+
 printf 'ok - client attachment acknowledges only the active pane\n'

@@ -33,12 +33,22 @@ diagnose() {
 	printf 'tmux-agents-status: uninstall: %s failed\n' "$1" >&2
 }
 
+has_option() {
+	scope=$1
+	name=$2
+	tas_uninstall_options=$(tmux show-options "$scope" 2>/dev/null) || return 1
+	printf '%s\n' "$tas_uninstall_options" | awk -v name="$name" '
+		$1 == name { found = 1 }
+		END { exit !found }
+	' >/dev/null 2>&1
+}
+
 has_global_option() {
-	tmux show-options -g "$1" >/dev/null 2>&1
+	has_option -g "$1"
 }
 
 has_server_option() {
-	tmux show-options -s "$1" >/dev/null 2>&1
+	has_option -s "$1"
 }
 
 remove_global_option() {

@@ -176,7 +176,7 @@ Run the core cleanup while the checkout still exists:
 ~/.tmux/plugins/tmux-agents-status/scripts/uninstall
 ```
 
-The command removes only live tmux state owned by this plugin: its hook entries and markers, unchanged defaults, pane records and acknowledgements, protocol metadata, and root metadata. It is safe to run repeatedly. It does not edit `~/.tmux.conf`, status formats, or other user hooks and options. Changed or pre-existing plugin option values are retained as user-owned live configuration.
+The command removes only live tmux state owned by this plugin: its hook entries and markers, defaults recorded as plugin-owned, pane records and acknowledgements, protocol metadata, and root metadata. It is safe to run repeatedly. It does not edit `~/.tmux.conf`, status formats, or other user hooks and options. Changed, pre-existing, or unmarked legacy option values are retained as user-owned live configuration.
 
 The command prints the exact plugin declaration and status-fragment strings to remove manually from your tmux configuration. Remove the applicable lines and fragments, then remove the checkout through TPM or delete the manual clone. Native agent adapters have separate package lifecycles and are not removed by this core command.
 
