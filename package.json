@@ -1,0 +1,9 @@
+{
+  "name": "tmux-agents-status",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./pi/tmux-agents-status.ts"]
+  }
+}

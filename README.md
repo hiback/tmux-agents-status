@@ -1,4 +1,4 @@
-# tmux Agents Status
+# Tmux Agents Status
 
 Show Pi activity in the tmux status bar, including active turns and unread results in other panes or sessions.
 
@@ -47,14 +47,14 @@ run-shell ~/.tmux/plugins/tmux-agents-status/tmux-agents-status.tmux
 
 ### 2. Install the Pi extension
 
-Run:
+Install this repository as a Pi package:
 
 ```sh
-mkdir -p "$HOME/.pi/agent/extensions"
-cp "$HOME/.tmux/plugins/tmux-agents-status/pi/tmux-agents-status.ts" "$HOME/.pi/agent/extensions/tmux-agents-status.ts"
+pi install git:github.com/hiback/tmux-agents-status
 ```
 
 Then enter `/reload` in Pi, or restart Pi.
+Run `pi update --extensions` to update it.
 
 The extension runs as your user. Install it only from source you trust.
 
