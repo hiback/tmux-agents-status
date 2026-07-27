@@ -98,47 +98,23 @@
         "hook_event_name": "Elicitation",
         "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
         "mcp_server_name": "docs",
-        "elicitation_id": "eli_6f1c2a9b4d",
+        "mode": "form",
         "message": "raw-secret elicitation text",
         "requested_schema": { "type": "object", "properties": { "secret": { "type": "string" } } },
-        "cwd": "/work",
-        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
-      },
-      "expected": ["wait-open:elicitation:eli_6f1c2a9b4d"]
-    },
-    {
-      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation:eli_6f1c2a9b4d",
-      "event": {
-        "hook_event_name": "Notification",
-        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        "notification_type": "elicitation_dialog",
-        "message": "raw-secret notification text",
         "cwd": "/work",
         "transcript_path": "/tmp/raw-secret/transcript.jsonl"
       },
       "expected": ["wait-open:elicitation"]
     },
     {
-      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation,elicitation:eli_6f1c2a9b4d",
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation",
       "event": {
         "hook_event_name": "ElicitationResult",
         "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
         "mcp_server_name": "docs",
-        "elicitation_id": "eli_6f1c2a9b4d",
+        "mode": "form",
         "action": "accept",
         "content": { "secret": "raw-secret answer" },
-        "cwd": "/work",
-        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
-      },
-      "expected": ["wait-close:elicitation:eli_6f1c2a9b4d"]
-    },
-    {
-      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation",
-      "event": {
-        "hook_event_name": "Notification",
-        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        "notification_type": "elicitation_complete",
-        "message": "raw-secret notification text",
         "cwd": "/work",
         "transcript_path": "/tmp/raw-secret/transcript.jsonl"
       },

@@ -211,7 +211,7 @@ for (const fixturePath of [
 		{ hook_event_name: "PostToolUse", session_id: session, tool_name: "Bash", agent_id: "agent_1" },
 		{ hook_event_name: "PostToolUseFailure", session_id: session, tool_name: "Bash", agent_type: "Explore" },
 		{ hook_event_name: "PermissionRequest", session_id: session, tool_name: "Bash", agent_id: "agent_1" },
-		{ hook_event_name: "Elicitation", session_id: session, elicitation_id: "eli_1", agent_id: "agent_1" },
+		{ hook_event_name: "Elicitation", session_id: session, mcp_server_name: "docs", agent_id: "agent_1" },
 		{ hook_event_name: "Stop", session_id: session, agent_id: "agent_1" },
 	])
 		assert.deepEqual(
@@ -245,16 +245,24 @@ for (const fixturePath of [
 	}
 }
 
-// MCP elicitation fails closed without a correlatable request identity.
+// Claude Code carries a native elicitation id only in URL mode, so the wait is
+// correlated by class and a native id never reaches the core.
 {
 	const { run } = harness();
 	const running = `v2|claude:${session}|-|turn:repl|running|-|-|-`;
-	for (const elicitation_id of [undefined, "", "has spaces"])
+	const waiting = `v2|claude:${session}|-|turn:repl|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation`;
+	for (const identity of [{ mode: "form" }, { mode: "url", elicitation_id: "eli_1", url: "https://docs.example/raw-secret" }]) {
 		assert.deepEqual(
-			shapes(run({ hook_event_name: "Elicitation", session_id: session, mcp_server_name: "docs", elicitation_id, message: "raw-secret" }, { record: running }).invocations),
-			[],
-			"elicitation without a valid request id opens no wait",
+			shapes(run({ hook_event_name: "Elicitation", session_id: session, mcp_server_name: "docs", message: "raw-secret", ...identity }, { record: running }).invocations),
+			["wait-open:elicitation"],
+			`a ${identity.mode} elicitation opens the elicitation wait`,
 		);
+		assert.deepEqual(
+			shapes(run({ hook_event_name: "ElicitationResult", session_id: session, mcp_server_name: "docs", action: "cancel", ...identity }, { record: waiting }).invocations),
+			["wait-close:elicitation"],
+			`a ${identity.mode} elicitation result closes the elicitation wait`,
+		);
+	}
 }
 
 // A queued prompt supersedes an open wait with a fresh turn.

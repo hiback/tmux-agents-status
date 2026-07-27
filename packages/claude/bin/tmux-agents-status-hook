@@ -33,7 +33,7 @@ esac
 # anything ambiguous fails validation instead of reaching the core.
 fields=$(awk '
 BEGIN {
-	split("hook_event_name session_id source notification_type tool_name elicitation_id agent_id agent_type", names, " ")
+	split("hook_event_name session_id source notification_type tool_name agent_id agent_type", names, " ")
 	for (n in names) wanted[names[n]] = 1
 }
 { buf = buf $0 "\n" }
@@ -151,7 +151,6 @@ session_id=
 source=
 notification_type=
 tool_name=
-elicitation_id=
 agent_present=
 tab=$(printf '\t')
 while IFS=$tab read -r field value; do
@@ -161,7 +160,6 @@ while IFS=$tab read -r field value; do
 	source) source=$value ;;
 	notification_type) notification_type=$value ;;
 	tool_name) tool_name=$value ;;
-	elicitation_id) elicitation_id=$value ;;
 	agent_present) agent_present=1 ;;
 	esac
 done <<EOF
@@ -260,8 +258,8 @@ claim() {
 	invoke claim "$owner" -
 }
 
-# Approximate waits share one synthetic request per wait class; exact paired
-# MCP elicitation waits carry their native request identity.
+# Each wait class shares one synthetic request. Claude Code sends a native
+# elicitation id only for URL-mode elicitations, so correlation is by class.
 open_wait() {
 	request=$1
 	owned_record || return 0
@@ -356,8 +354,6 @@ Notification)
 	case $notification_type in
 	permission_prompt) open_wait permission ;;
 	idle_prompt) terminal completed ;;
-	elicitation_dialog) open_wait elicitation ;;
-	elicitation_complete) close_wait elicitation ;;
 	esac
 	;;
 Stop)
@@ -367,14 +363,10 @@ StopFailure)
 	terminal failed
 	;;
 Elicitation)
-	if [ -n "$elicitation_id" ] && valid_identifier "elicitation:$elicitation_id"; then
-		open_wait "elicitation:$elicitation_id"
-	fi
+	open_wait elicitation
 	;;
 ElicitationResult)
-	if [ -n "$elicitation_id" ] && valid_identifier "elicitation:$elicitation_id"; then
-		close_wait "elicitation:$elicitation_id"
-	fi
+	close_wait elicitation
 	;;
 esac
 exit 0

@@ -97,13 +97,13 @@ try {
 	send({ hook_event_name: "PostToolUse", session_id: session, tool_name: "AskUserQuestion", tool_response: "raw-secret" });
 	assert.equal(option("state"), running, "the answered question resumes running");
 
-	// Paired MCP elicitation reports exact waiting with native correlation.
-	send({ hook_event_name: "Elicitation", session_id: session, mcp_server_name: "docs", elicitation_id: "eli_6f1c", message: "raw-secret" });
+	// Paired MCP elicitation reports exact waiting from both native boundaries.
+	send({ hook_event_name: "Elicitation", session_id: session, mcp_server_name: "docs", mode: "form", message: "raw-secret" });
 	assert.match(
 		option("state"),
-		new RegExp(`^v2\\|${owner}\\|-\\|${turn}\\|waiting\\|g:[0-9a-f]{32}\\|running\\|elicitation:eli_6f1c$`),
+		new RegExp(`^v2\\|${owner}\\|-\\|${turn}\\|waiting\\|g:[0-9a-f]{32}\\|running\\|elicitation$`),
 	);
-	send({ hook_event_name: "ElicitationResult", session_id: session, mcp_server_name: "docs", elicitation_id: "eli_6f1c", action: "accept", content: "raw-secret" });
+	send({ hook_event_name: "ElicitationResult", session_id: session, mcp_server_name: "docs", mode: "form", action: "accept", content: "raw-secret" });
 	assert.equal(option("state"), running, "the paired elicitation result closes the exact wait");
 
 	// Main-agent stop evidence reports approximate completion.

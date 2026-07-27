@@ -83,7 +83,7 @@ assert.equal(
 );
 assert.equal(
 	hooks.Notification[0].matcher,
-	"permission_prompt|idle_prompt|elicitation_dialog|elicitation_complete",
+	"permission_prompt|idle_prompt",
 	"only supported notification classes reach the adapter",
 );
 for (const event of ["UserPromptSubmit", "Stop"])
