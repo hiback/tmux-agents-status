@@ -1,0 +1,108 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
+
+fail() {
+	printf 'not ok - %s\n' "$1" >&2
+	exit 1
+}
+
+marketplace=$root/.agents/plugins/marketplace.json
+plugin=$root/packages/codex
+
+[ -f "$marketplace" ] || fail 'the repository declares a Codex marketplace at its native discovery path'
+[ -d "$plugin" ] || fail 'the marketplace plugin directory exists'
+
+# The plugin tree contains only the adapter: its manifest, hook definitions,
+# and hook executable.
+(
+	cd "$plugin"
+	find . -type f | LC_ALL=C sort
+) >"${TMPDIR:-/tmp}/tmux-agents-status-codex-tree-$$"
+trap 'rm -f "${TMPDIR:-/tmp}/tmux-agents-status-codex-tree-$$"' 0
+printf '%s\n' \
+	'./.codex-plugin/plugin.json' \
+	'./bin/tmux-agents-status-hook' \
+	'./hooks/hooks.json' |
+	cmp -s - "${TMPDIR:-/tmp}/tmux-agents-status-codex-tree-$$" ||
+	fail 'the Codex plugin artifact contains only its manifest, hooks, and executable'
+
+node - "$root" <<'EOF'
+const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const root = process.argv[2];
+const read = (path) => JSON.parse(readFileSync(`${root}/${path}`, "utf8"));
+
+const marketplace = read(".agents/plugins/marketplace.json");
+assert.equal(marketplace.name, "tmux-agents-status", "marketplace name is canonical");
+assert.equal(marketplace.plugins.length, 1, "the marketplace ships only the Codex adapter");
+const [entry] = marketplace.plugins;
+assert.equal(entry.name, "tmux-agents-status", "plugin name is canonical");
+assert.deepEqual(entry.source, { source: "local", path: "./packages/codex" }, "plugin resolves from this repository");
+assert.equal(entry.policy.installation, "AVAILABLE", "the plugin is installed only on request");
+assert.equal(entry.policy.authentication, "ON_INSTALL", "the plugin declares the required authentication policy");
+assert.equal(typeof entry.category, "string", "the marketplace entry declares a category");
+
+const manifest = read("packages/codex/.codex-plugin/plugin.json");
+assert.equal(manifest.name, "tmux-agents-status", "plugin manifest name is canonical");
+assert.match(manifest.version, /^[0-9]+\.[0-9]+\.[0-9]+$/, "plugin is independently versioned");
+assert.equal(typeof manifest.description, "string", "plugin manifest describes the adapter");
+assert.equal(manifest.hooks, "./hooks/hooks.json", "plugin manifest points at its bundled hooks");
+for (const field of ["skills", "mcpServers", "apps"])
+	assert.equal(field in manifest, false, `the adapter bundles no ${field}`);
+
+const command = '"${PLUGIN_ROOT}/bin/tmux-agents-status-hook"';
+const hooks = read("packages/codex/hooks/hooks.json").hooks;
+assert.deepEqual(
+	Object.keys(hooks).sort(),
+	[
+		"PermissionRequest",
+		"PostToolUse",
+		"PreToolUse",
+		"SessionEnd",
+		"SessionStart",
+		"Stop",
+		"UserPromptSubmit",
+	],
+	"every subscribed native event routes to the adapter",
+);
+for (const [event, entries] of Object.entries(hooks)) {
+	for (const entry of entries) {
+		assert.equal(entry.hooks.length, 1, `${event} runs exactly one hook command`);
+		const [hook] = entry.hooks;
+		assert.equal(hook.type, "command", `${event} uses a command hook`);
+		assert.equal(hook.command, command, `${event} invokes the plugin-cached executable`);
+		assert.equal(hook.timeout, 1, `${event} stays within a bounded synchronous budget`);
+		assert.equal("async" in hook, false, `${event} never runs asynchronously`);
+	}
+}
+assert.equal(
+	hooks.SessionStart[0].matcher,
+	"startup|resume|clear",
+	"session replacement claims exclude compaction",
+);
+for (const event of ["UserPromptSubmit", "Stop"])
+	assert.equal("matcher" in hooks[event][0], false, `${event} has no matcher field`);
+for (const event of ["PreToolUse", "PostToolUse", "PermissionRequest", "SessionEnd"])
+	assert.equal(hooks[event][0].matcher, "*", `${event} matches every value`);
+EOF
+
+hook=$plugin/bin/tmux-agents-status-hook
+[ -x "$hook" ] || fail 'the hook executable is directly runnable'
+grep -F '@tmux-agents-status-root' "$hook" >/dev/null ||
+	fail 'the adapter discovers the canonical core root through the tmux server'
+grep -F '@tmux-agents-status-protocol' "$hook" >/dev/null ||
+	fail 'the adapter negotiates the core protocol through the tmux server'
+grep -F '"$protocol" = 2' "$hook" >/dev/null ||
+	fail 'the adapter declares compatible core protocol major 2'
+grep -E 'set-option|set-hook|tas_parse_record' "$hook" >/dev/null &&
+	fail 'the adapter never writes tmux state or embeds a fallback core'
+
+# Native hook trust is the user's separate decision and is never bypassed.
+grep -rF 'dangerously-bypass-hook-trust' "$plugin" "$marketplace" >/dev/null &&
+	fail 'the Codex artifact never bypasses native hook trust'
+grep -rF 'app-server' "$plugin" >/dev/null &&
+	fail 'the Codex adapter never substitutes an app-server for the direct TUI'
+
+printf 'ok - Codex marketplace artifact contains only the independently installable adapter\n'

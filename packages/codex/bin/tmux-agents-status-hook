@@ -1,0 +1,365 @@
+#!/bin/sh
+# Codex lifecycle adapter for tmux-agents-status. It reads one native payload,
+# either a lifecycle hook JSON object on stdin or the optional legacy notify
+# object passed as the final argument, and translates supported lifecycle
+# evidence into the shared core's normalized operations. It never writes
+# stdout, never fails Codex, and never forwards prompts, responses, tool
+# arguments, transcripts, native errors, or model text to the core.
+set -u
+
+# Hook errors must never block or fail Codex.
+trap 'exit 0' EXIT
+
+LC_ALL=C
+export LC_ALL
+
+operation=hook
+diagnose() {
+	printf 'tmux-agents-status: codex adapter: %s failed\n' "$operation" >&2
+}
+
+[ "${TMUX-}" ] || exit 0
+pane=${TMUX_PANE-}
+case $pane in
+%[0-9]*)
+	case ${pane#%} in
+	*[!0-9]*) exit 0 ;;
+	esac
+	;;
+*) exit 0 ;;
+esac
+
+# Only allow-listed top-level lifecycle fields are extracted. The parser keeps
+# string escapes raw, so escaped or nested content can never spoof a field;
+# anything ambiguous fails validation instead of reaching the core.
+extract_fields() {
+	awk '
+BEGIN {
+	split("hook_event_name session_id turn_id source agent_id agent_type type thread-id turn-id", names, " ")
+	for (n in names) wanted[names[n]] = 1
+}
+{ buf = buf $0 "\n" }
+END {
+	n = length(buf)
+	i = 1
+	skipws()
+	if (i > n || substr(buf, i, 1) != "{") exit 1
+	if (!jobject(1)) exit 1
+	skipws()
+	if (i <= n) exit 1
+	for (k in out) printf "%s\t%s\n", k, out[k]
+	if (agent_present) printf "agent_present\t1\n"
+}
+
+function skipws(   c) {
+	while (i <= n) {
+		c = substr(buf, i, 1)
+		if (c == " " || c == "\t" || c == "\r" || c == "\n") i++
+		else return
+	}
+}
+
+# Parses a JSON string starting at a quote. The raw content, with escape
+# sequences preserved, is returned in jval.
+function jstring(   s, c) {
+	i++
+	s = ""
+	while (i <= n) {
+		c = substr(buf, i, 1)
+		if (c == "\"") { i++; jval = s; return 1 }
+		if (c == "\\") {
+			if (i + 1 > n) return 0
+			s = s substr(buf, i, 2)
+			i += 2
+		} else {
+			s = s c
+			i++
+		}
+	}
+	return 0
+}
+
+function jobject(depth,   key, is_string, vstart) {
+	i++
+	skipws()
+	if (i <= n && substr(buf, i, 1) == "}") { i++; return 1 }
+	while (i <= n) {
+		skipws()
+		if (substr(buf, i, 1) != "\"") return 0
+		if (!jstring()) return 0
+		key = jval
+		skipws()
+		if (substr(buf, i, 1) != ":") return 0
+		i++
+		skipws()
+		if (i > n) return 0
+		is_string = (substr(buf, i, 1) == "\"")
+		vstart = i
+		if (!jvalue(depth + 1)) return 0
+		if (depth == 1 && key in wanted) {
+			if (is_string) {
+				if (key == "agent_id" || key == "agent_type") {
+					if (jval != "") agent_present = 1
+				} else out[key] = jval
+			} else if ((key == "agent_id" || key == "agent_type") && substr(buf, vstart, 4) != "null")
+				agent_present = 1
+		}
+		skipws()
+		if (i > n) return 0
+		if (substr(buf, i, 1) == ",") { i++; continue }
+		if (substr(buf, i, 1) == "}") { i++; return 1 }
+		return 0
+	}
+	return 0
+}
+
+function jarray(depth   ) {
+	i++
+	skipws()
+	if (i <= n && substr(buf, i, 1) == "]") { i++; return 1 }
+	while (i <= n) {
+		if (!jvalue(depth + 1)) return 0
+		skipws()
+		if (i > n) return 0
+		if (substr(buf, i, 1) == ",") { i++; continue }
+		if (substr(buf, i, 1) == "]") { i++; return 1 }
+		return 0
+	}
+	return 0
+}
+
+function jvalue(depth,   c) {
+	skipws()
+	if (i > n) return 0
+	c = substr(buf, i, 1)
+	if (c == "\"") return jstring()
+	if (c == "{") return jobject(depth)
+	if (c == "[") return jarray(depth)
+	if (match(substr(buf, i), /^(true|false|null|-?[0-9][0-9.eE+-]*)/)) {
+		jval = substr(buf, i, RLENGTH)
+		i += RLENGTH
+		return 1
+	}
+	return 0
+}
+'
+}
+
+# Lifecycle hooks deliver their JSON object on stdin. The legacy notify program
+# receives it as its last argument instead and its standard streams are closed.
+if [ "$#" -ge 1 ]; then
+	mode=notify
+	while [ "$#" -gt 1 ]; do shift; done
+	fields=$(printf '%s\n' "$1" | extract_fields)
+else
+	mode=hook
+	fields=$(extract_fields)
+fi || {
+	operation=parse
+	diagnose
+	exit 0
+}
+
+hook_event_name=
+session_id=
+turn_id=
+source=
+notify_type=
+agent_present=
+tab=$(printf '\t')
+while IFS=$tab read -r field value; do
+	case $field in
+	hook_event_name) hook_event_name=$value ;;
+	session_id) session_id=$value ;;
+	turn_id) turn_id=$value ;;
+	source) source=$value ;;
+	type) notify_type=$value ;;
+	thread-id) session_id=$value ;;
+	turn-id) turn_id=$value ;;
+	agent_present) agent_present=1 ;;
+	esac
+done <<EOF
+$fields
+EOF
+
+# Subagent and background activity never owns the pane.
+[ -z "$agent_present" ] || exit 0
+
+valid_identifier() {
+	[ "${#1}" -le 96 ] || return 1
+	printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$' 2>/dev/null
+}
+
+# The pane owner derives from the native thread identity and every turn-scoped
+# payload carries Codex's own turn identity, so stateless hook processes
+# correlate through the core record without inventing identifiers.
+if [ "$mode" = notify ]; then
+	[ "$notify_type" = agent-turn-complete ] || exit 0
+	event=AgentTurnComplete
+else
+	event=$hook_event_name
+fi
+owner=
+turn=-
+case $event in
+SessionStart | SessionEnd) ;;
+UserPromptSubmit | PreToolUse | PostToolUse | PermissionRequest | Stop | AgentTurnComplete)
+	valid_identifier "$turn_id" || exit 0
+	turn=turn:$turn_id
+	valid_identifier "$turn" || exit 0
+	;;
+*) exit 0 ;;
+esac
+valid_identifier "$session_id" || exit 0
+owner=codex:$session_id
+valid_identifier "$owner" || exit 0
+
+# The canonical core is discovered through the tmux server and must speak
+# protocol major 2. A missing or incompatible core is a silent no-op.
+core=
+discover_core() {
+	[ -z "$core" ] || return 0
+	root=$(tmux show-option -gqv @tmux-agents-status-root 2>/dev/null) || return 1
+	protocol=$(tmux show-option -gqv @tmux-agents-status-protocol 2>/dev/null) || return 1
+	[ "$protocol" = 2 ] || return 1
+	case $root in /*) ;; *) return 1 ;; esac
+	root=${root%/}
+	[ -x "$root/scripts/state-core" ] || return 1
+	core=$root/scripts/state-core
+}
+
+invoke() {
+	operation=$1
+	shift
+	discover_core || return 1
+	"$core" 2 "$operation" "$@" >/dev/null || {
+		diagnose
+		return 1
+	}
+}
+
+# The current pane record supplies turn and wait correlation for this hook
+# process. Unknown, malformed, or foreign records fail closed.
+rec_owner=
+rec_turn=
+rec_state=
+rec_requests=
+read_record() {
+	rec_owner=
+	rec_turn=
+	rec_state=
+	rec_requests=
+	record=$(tmux show-option -sqv "@tmux-agents-status-state-$pane" 2>/dev/null) || return 1
+	[ -n "$record" ] || return 1
+	[ "${#record}" -le 2048 ] || return 1
+	case $record in *'
+'*) return 1 ;;
+	esac
+	printf '%s\n' "$record" | awk -F '|' 'NF == 8 { found = 1 } END { exit !found }' >/dev/null 2>&1 || return 1
+	IFS='|' read -r rec_version rec_owner rec_liveness rec_turn rec_state rec_generation rec_resume rec_requests <<EOF
+$record
+EOF
+	[ "$rec_version" = v2 ] || return 1
+	valid_identifier "$rec_owner" || return 1
+	case $rec_state in
+	none | running | waiting | completed | failed) ;;
+	*) return 1 ;;
+	esac
+	if [ "$rec_turn" != - ]; then
+		valid_identifier "$rec_turn" || return 1
+	fi
+	return 0
+}
+
+owned_record() {
+	read_record && [ "$rec_owner" = "$owner" ]
+}
+
+# A payload from an already superseded turn cannot resolve waits or settle the
+# current turn. Only activity may introduce a newer turn.
+current_turn() {
+	[ "$rec_turn" = - ] || [ "$rec_turn" = "$turn" ]
+}
+
+claim() {
+	invoke claim "$owner" -
+}
+
+# Prompt submission and foreground tool activity report the documented
+# approximate running state. Same-turn activity after an approximate completion
+# is the approved repair evidence for dismissing it; a newer turn supersedes
+# the previous one instead.
+activity() {
+	case $rec_state in
+	running)
+		[ "$rec_turn" = "$turn" ] && return 0
+		;;
+	completed)
+		if [ "$rec_turn" = "$turn" ]; then
+			invoke dismiss-terminal "$owner" || return 0
+		fi
+		;;
+	esac
+	invoke start "$owner" "$turn"
+}
+
+# Native permission requests are the only approved waiting evidence. Codex has
+# no paired resolution hook, so the episode is repaired by later activity or
+# closed by terminal evidence.
+open_wait() {
+	request=$1
+	owned_record && current_turn || return 0
+	case $rec_state in completed | failed) return 0 ;; esac
+	case ,$rec_requests, in *,$request,*) return 0 ;; esac
+	invoke wait-open "$owner" "$turn" "$request"
+}
+
+# Main-agent stop and agent-turn-complete evidence complete an observed active
+# turn only; they never invent an outcome for untracked or superseded work.
+terminal() {
+	outcome=$1
+	owned_record && current_turn || return 0
+	case $rec_state in running | waiting) ;; *) return 0 ;; esac
+	invoke finish "$owner" "$turn" "$outcome"
+}
+
+case $event in
+SessionStart)
+	# Only real session replacement claims the pane; compaction is not
+	# replacement, and a repeated start for the owning session keeps state.
+	case $source in
+	startup | resume | clear)
+		owned_record || claim
+		;;
+	esac
+	;;
+SessionEnd)
+	# Graceful session end releases compare-matched ownership; active work is
+	# interrupted and terminal outcomes are preserved.
+	if owned_record; then
+		case $rec_state in
+		running | waiting) invoke release "$owner" interrupted ;;
+		*) invoke release "$owner" clear ;;
+		esac
+	fi
+	;;
+UserPromptSubmit)
+	# Prompt submission replaces stale ownership and clears any old terminal
+	# alert before starting the approximate running turn.
+	if owned_record; then
+		activity
+	else
+		claim && invoke start "$owner" "$turn"
+	fi
+	;;
+PreToolUse | PostToolUse)
+	owned_record && activity
+	;;
+PermissionRequest)
+	open_wait permission
+	;;
+Stop | AgentTurnComplete)
+	terminal completed
+	;;
+esac
+exit 0

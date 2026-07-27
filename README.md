@@ -19,10 +19,11 @@ There is no background daemon. Native adapters send bounded lifecycle events to 
   - [Pi](https://github.com/badlogic/pi-mono) 0.81.1 or newer, in TUI mode
   - [OpenCode](https://opencode.ai) 1.15.11 or newer
   - [Claude Code](https://code.claude.com) 2.1.79 or newer
+  - [Codex](https://developers.openai.com/codex) 0.145.0 or newer
 
 ## Install
 
-The canonical tmux core and at least one native agent adapter are required. Pi, OpenCode, and Claude Code are the adapters implemented in this checkout. Install only the adapters you use; each one has its own package lifecycle and never touches another agent's configuration.
+The canonical tmux core and at least one native agent adapter are required. Pi, OpenCode, Claude Code, and Codex are the adapters implemented in this checkout. Install only the adapters you use; each one has its own package lifecycle and never touches another agent's configuration.
 
 ### 1. Install the tmux plugin
 
@@ -86,6 +87,28 @@ Start or restart Claude Code inside tmux. The marketplace contains only the Clau
 ```sh
 claude plugin update tmux-agents-status@tmux-agents-status --scope user
 claude plugin uninstall tmux-agents-status@tmux-agents-status --scope user
+```
+
+### 5. Install the Codex plugin
+
+Add this repository as a Codex marketplace and install its plugin:
+
+```sh
+codex plugin marketplace add hiback/tmux-agents-status
+codex plugin add tmux-agents-status@tmux-agents-status
+```
+
+Installing a plugin does not trust its hooks. Start Codex inside tmux, run `/hooks`, review the exact `tmux-agents-status` hook definition, and trust it. Until you do, the adapter stays inactive. Reviewing the definition again is required whenever it changes. Codex owns enablement, caching, updates, and removal:
+
+```sh
+codex plugin marketplace upgrade tmux-agents-status
+codex plugin remove tmux-agents-status@tmux-agents-status
+```
+
+Optionally, Codex's separate `notify` program can report the same completion signal. It is not a hook, so it is not covered by hook trust, and Codex allows only one of them; it is therefore user-owned configuration that this repository never writes. To use it, point `notify` in `~/.codex/config.toml` at the installed adapter:
+
+```toml
+notify = ["/absolute/path/to/plugin/bin/tmux-agents-status-hook"]
 ```
 
 Adapters run as your user. Install them only from source you trust.
@@ -202,6 +225,8 @@ An OpenCode turn that continues after a rejected request, which its non-default 
 
 Claude Code reports approximate `running` from prompt submission and later foreground tool activity, approximate `waiting` from permission and question hooks, exact `waiting` for paired MCP elicitation, approximate `completed` from main-agent stop or idle-prompt evidence, and exact `failed` only for terminal API errors. Later foreground activity repairs approximate waiting and completion, while an exact failure stays final. User cancellation and all other failure classes are unsupported and never invent a terminal state. Subagent activity never takes the pane over, and `/resume` or `/clear` replaces pane ownership. Because Claude Code exposes no reliable long-lived process identity, abrupt termination may leave stale state until graceful session end, a later session claim, or pane exit.
 
+Codex reports approximate `running` from prompt submission and later foreground tool activity, approximate `waiting` for native approval requests only, and approximate `completed` from main-agent stop or agent-turn-complete evidence. Later foreground activity in the same turn repairs approximate waiting and completion, and a later turn supersedes them. `failed` is unsupported: Codex exposes no native failure or cancellation evidence for a directly running TUI, so a failed or cancelled turn keeps its last reported state until the next prompt or session end. Waiting is reported when Codex asks for approval, before any decision is made, so a request that one of your other hooks answers automatically is briefly reported as waiting until the next activity repairs it. Commands that need no approval, including under a permission mode that skips prompts, are never reported as waiting. Subagent activity never takes the pane over, `/clear` and resume replace pane ownership, and compaction does not. Because Codex exposes no reliable long-lived process identity, abrupt termination may leave stale state until graceful session end, a later session claim, or pane exit.
+
 Adapters and the core exchange protocol major 2 lifecycle identifiers only. They do not inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content. v1, future-version, malformed, and oversized tmux records are ignored.
 
 ## Uninstall the tmux core
@@ -223,7 +248,7 @@ If nothing appears:
 1. Confirm both the tmux plugin and your agent's adapter are installed.
 2. Confirm both exact fragment strings were added to `~/.tmux.conf`.
 3. Run `tmux source-file "$HOME/.tmux.conf"`.
-4. Enter `/reload` in Pi, or restart OpenCode or Claude Code.
+4. Enter `/reload` in Pi, or restart OpenCode, Claude Code, or Codex. For Codex, also confirm its hooks are trusted in `/hooks`.
 5. Start a turn inside tmux and allow about one second for the first update.
 
 The adapters are intentionally inactive outside tmux, in Pi print, JSON, or RPC modes, and wherever the core is missing or protocol-incompatible.
@@ -234,4 +259,6 @@ The adapters are intentionally inactive outside tmux, in Pi print, JSON, or RPC 
 - The agent and tmux must run on the same host.
 - OpenCode reports the same lifecycle from any pane it runs in, including non-interactive commands; it exposes no native signal that separates them.
 - Claude Code cannot report user cancellation or most failure classes; an interrupted turn keeps its last reported state until the next prompt or session end.
+- Codex cannot report any failure or cancellation, and its approval waits stay reported until later activity or a reported outcome replaces them.
+- Codex hooks stay inactive until you review and trust their exact definition in `/hooks`; the adapter never bypasses that review.
 - Nested tmux, SSH aggregation, and Windows are not supported.
