@@ -1,0 +1,233 @@
+{
+  "version": "2.1.220",
+  "sessionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "steps": [
+    {
+      "record": null,
+      "event": {
+        "hook_event_name": "SessionStart",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "source": "startup",
+        "model": "claude-opus-4-1",
+        "permission_mode": "default",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "session_title": "raw-secret session title"
+      },
+      "expected": [
+        "claim"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|-|none|-|-|-",
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "prompt": "raw-secret prompt text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "start"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_179w",
+        "tool_input": {
+          "command": "raw-secret command"
+        },
+        "permission_suggestions": [
+          {
+            "type": "raw-secret"
+          }
+        ],
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "wait-open:permission"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|permission",
+      "event": {
+        "hook_event_name": "Notification",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "notification_type": "permission_prompt",
+        "message": "raw-secret notification text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": []
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|permission",
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_179w",
+        "tool_input": {
+          "command": "raw-secret command"
+        },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "start"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_179q",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "raw-secret question"
+            }
+          ]
+        },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "wait-open:question"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|question",
+      "event": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_179q",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "raw-secret question"
+            }
+          ]
+        },
+        "tool_response": {
+          "answers": {
+            "0": "raw-secret answer"
+          }
+        },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "start"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "Elicitation",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "mcp_server_name": "docs",
+        "elicitation_id": "eli_6f1c2a9b4d",
+        "message": "raw-secret elicitation text",
+        "requested_schema": {
+          "type": "object",
+          "properties": {
+            "secret": {
+              "type": "string"
+            }
+          }
+        },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "wait-open:elicitation:eli_6f1c2a9b4d"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation:eli_6f1c2a9b4d",
+      "event": {
+        "hook_event_name": "Notification",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "notification_type": "elicitation_dialog",
+        "message": "raw-secret notification text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "wait-open:elicitation"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation,elicitation:eli_6f1c2a9b4d",
+      "event": {
+        "hook_event_name": "ElicitationResult",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "mcp_server_name": "docs",
+        "elicitation_id": "eli_6f1c2a9b4d",
+        "action": "accept",
+        "content": {
+          "secret": "raw-secret answer"
+        },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "wait-close:elicitation:eli_6f1c2a9b4d"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|waiting|g:0123456789abcdef0123456789abcdef|running|elicitation",
+      "event": {
+        "hook_event_name": "Notification",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "notification_type": "elicitation_complete",
+        "message": "raw-secret notification text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "wait-close:elicitation"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "Stop",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "stop_hook_active": false,
+        "last_assistant_message": "raw-secret model text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3",
+        "background_tasks": [
+          {
+            "id": "raw-secret"
+          }
+        ],
+        "session_crons": []
+      },
+      "expected": [
+        "finish:completed"
+      ]
+    }
+  ]
+}

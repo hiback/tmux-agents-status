@@ -1,0 +1,82 @@
+{
+  "version": "2.1.220",
+  "sessionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "steps": [
+    {
+      "record": null,
+      "event": {
+        "hook_event_name": "SessionStart",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "source": "startup",
+        "model": "claude-opus-4-1",
+        "permission_mode": "default",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "session_title": "raw-secret session title"
+      },
+      "expected": [
+        "claim"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|-|none|-|-|-",
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "prompt": "raw-secret prompt text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "start"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "StopFailure",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "error": "overloaded",
+        "error_details": "raw-secret native error text",
+        "last_assistant_message": "raw-secret model text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "finish:failed"
+      ]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|failed|g:0123456789abcdef0123456789abcdef|-|-",
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_179f",
+        "tool_input": {
+          "command": "raw-secret command"
+        },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": []
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|failed|g:0123456789abcdef0123456789abcdef|-|-",
+      "event": {
+        "hook_event_name": "SessionEnd",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "reason": "logout",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl",
+        "prompt_id": "prompt_01JZK3"
+      },
+      "expected": [
+        "release:clear"
+      ]
+    }
+  ]
+}

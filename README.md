@@ -18,10 +18,11 @@ There is no background daemon. Native adapters send bounded lifecycle events to 
 - At least one supported agent, running directly inside a tmux pane:
   - [Pi](https://github.com/badlogic/pi-mono) 0.81.1 or newer, in TUI mode
   - [OpenCode](https://opencode.ai) 1.15.11 or newer
+  - [Claude Code](https://code.claude.com) 2.1.79 or newer
 
 ## Install
 
-The canonical tmux core and at least one native agent adapter are required. Pi and OpenCode are the adapters implemented in this checkout. Install only the adapters you use; each one has its own package lifecycle and never touches another agent's configuration.
+The canonical tmux core and at least one native agent adapter are required. Pi, OpenCode, and Claude Code are the adapters implemented in this checkout. Install only the adapters you use; each one has its own package lifecycle and never touches another agent's configuration.
 
 ### 1. Install the tmux plugin
 
@@ -70,6 +71,22 @@ opencode plugin --global /absolute/path/to/tmux-agents-status/packages/opencode
 Restart OpenCode. The package contains only the OpenCode adapter and discovers the same canonical core. Re-run the command with `--force` to move a registered entry to a newer package spec.
 
 OpenCode has no plugin removal command yet. To uninstall, remove only that package entry from the `plugin` array in `~/.config/opencode/opencode.json`.
+
+### 4. Install the Claude Code plugin
+
+Add this repository as a Claude Code marketplace and install its plugin at user scope:
+
+```sh
+claude plugin marketplace add hiback/tmux-agents-status
+claude plugin install tmux-agents-status@tmux-agents-status --scope user
+```
+
+Start or restart Claude Code inside tmux. The marketplace contains only the Claude Code adapter; its hooks discover the same canonical core and become a no-op when that core is missing or protocol-incompatible. Claude Code owns enablement, caching, updates, and removal:
+
+```sh
+claude plugin update tmux-agents-status@tmux-agents-status --scope user
+claude plugin uninstall tmux-agents-status@tmux-agents-status --scope user
+```
 
 Adapters run as your user. Install them only from source you trust.
 
@@ -183,6 +200,8 @@ OpenCode reports exact `running` while its root session is busy, exact `waiting`
 
 An OpenCode turn that continues after a rejected request, which its non-default continued-on-deny behavior allows, is reported as completed once its assistant message settles normally.
 
+Claude Code reports approximate `running` from prompt submission and later foreground tool activity, approximate `waiting` from permission and question hooks, exact `waiting` for paired MCP elicitation, approximate `completed` from main-agent stop or idle-prompt evidence, and exact `failed` only for terminal API errors. Later foreground activity repairs approximate waiting and completion, while an exact failure stays final. User cancellation and all other failure classes are unsupported and never invent a terminal state. Subagent activity never takes the pane over, and `/resume` or `/clear` replaces pane ownership. Because Claude Code exposes no reliable long-lived process identity, abrupt termination may leave stale state until graceful session end, a later session claim, or pane exit.
+
 Adapters and the core exchange protocol major 2 lifecycle identifiers only. They do not inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content. v1, future-version, malformed, and oversized tmux records are ignored.
 
 ## Uninstall the tmux core
@@ -204,7 +223,7 @@ If nothing appears:
 1. Confirm both the tmux plugin and your agent's adapter are installed.
 2. Confirm both exact fragment strings were added to `~/.tmux.conf`.
 3. Run `tmux source-file "$HOME/.tmux.conf"`.
-4. Enter `/reload` in Pi, or restart OpenCode.
+4. Enter `/reload` in Pi, or restart OpenCode or Claude Code.
 5. Start a turn inside tmux and allow about one second for the first update.
 
 The adapters are intentionally inactive outside tmux, in Pi print, JSON, or RPC modes, and wherever the core is missing or protocol-incompatible.
@@ -214,4 +233,5 @@ The adapters are intentionally inactive outside tmux, in Pi print, JSON, or RPC 
 - One directly running main agent per pane is supported; subagents and background work do not take pane ownership.
 - The agent and tmux must run on the same host.
 - OpenCode reports the same lifecycle from any pane it runs in, including non-interactive commands; it exposes no native signal that separates them.
+- Claude Code cannot report user cancellation or most failure classes; an interrupted turn keeps its last reported state until the next prompt or session end.
 - Nested tmux, SSH aggregation, and Windows are not supported.

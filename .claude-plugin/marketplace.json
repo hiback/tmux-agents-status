@@ -1,0 +1,11 @@
+{
+  "name": "tmux-agents-status",
+  "owner": { "name": "hiback" },
+  "plugins": [
+    {
+      "name": "tmux-agents-status",
+      "source": "./packages/claude",
+      "description": "Report Claude Code lifecycle state to the tmux-agents-status tmux core"
+    }
+  ]
+}

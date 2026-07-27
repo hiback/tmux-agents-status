@@ -1,0 +1,103 @@
+{
+  "version": "2.1.79",
+  "sessionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "steps": [
+    {
+      "record": null,
+      "event": {
+        "hook_event_name": "SessionStart",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "source": "startup",
+        "model": "claude-opus-4-1",
+        "permission_mode": "default",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["claim"]
+    },
+    {
+      "record": "v2|@OWNER@|-|-|none|-|-|-",
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "prompt": "raw-secret prompt text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["start"]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_179a",
+        "tool_input": { "command": "raw-secret command" },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": []
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "Stop",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "stop_hook_active": false,
+        "last_assistant_message": "raw-secret model text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["finish:completed"]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|completed|g:0123456789abcdef0123456789abcdef|-|-",
+      "event": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "tool_name": "Read",
+        "tool_use_id": "toolu_179b",
+        "tool_input": { "file_path": "/tmp/raw-secret" },
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["dismiss-terminal", "start"]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "Stop",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "stop_hook_active": true,
+        "last_assistant_message": "raw-secret model text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["finish:completed"]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|completed|g:0123456789abcdef0123456789abcdef|-|-",
+      "event": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "prompt": "raw-secret follow-up prompt",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["start"]
+    },
+    {
+      "record": "v2|@OWNER@|-|@TURN@|running|-|-|-",
+      "event": {
+        "hook_event_name": "Notification",
+        "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "notification_type": "idle_prompt",
+        "message": "raw-secret notification text",
+        "cwd": "/work",
+        "transcript_path": "/tmp/raw-secret/transcript.jsonl"
+      },
+      "expected": ["finish:completed"]
+    }
+  ]
+}
