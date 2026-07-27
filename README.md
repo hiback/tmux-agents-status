@@ -113,12 +113,15 @@ codex plugin marketplace add hiback/tmux-agents-status
 codex plugin add tmux-agents-status@tmux-agents-status
 ```
 
-Installing a plugin does not trust its hooks. Start Codex inside tmux, run `/hooks`, review the exact `tmux-agents-status` hook definition, and trust it. Until you do, the adapter stays inactive. Reviewing the definition again is required whenever it changes. Codex owns enablement, caching, updates, and removal:
+Installing a plugin does not trust its hooks. Start Codex inside tmux and answer its hook review, or run `/hooks`, review the exact `tmux-agents-status` hook definition, and trust it. Until you do, the adapter stays inactive. Reviewing the definition again is required whenever it changes; a release that leaves it unchanged stays trusted. Codex owns enablement, caching, updates, and removal:
 
 ```sh
 codex plugin marketplace upgrade tmux-agents-status
+codex plugin add tmux-agents-status@tmux-agents-status
 codex plugin remove tmux-agents-status@tmux-agents-status
 ```
+
+Upgrading refreshes the marketplace snapshot; installing again is what moves the plugin to the newer version.
 
 Optionally, Codex's separate `notify` program can report the same completion signal. It is not a hook, so it is not covered by hook trust, and Codex allows only one of them; it is therefore user-owned configuration that this repository never writes. To use it, point `notify` in `~/.codex/config.toml` at the installed adapter:
 
