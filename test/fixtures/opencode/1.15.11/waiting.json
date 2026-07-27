@@ -1,0 +1,52 @@
+{
+  "version": "1.15.11",
+  "expected": [
+    "claim",
+    "start",
+    "wait-open:per_115a",
+    "wait-close:per_115a",
+    "finish:completed"
+  ],
+  "events": [
+    {
+      "type": "session.created",
+      "properties": { "info": { "id": "ses_115wait", "directory": "/work" } }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_115wait", "status": { "type": "busy" } }
+    },
+    {
+      "type": "permission.asked",
+      "properties": {
+        "id": "per_115a",
+        "sessionID": "ses_115wait",
+        "permission": "bash",
+        "patterns": ["raw-secret command"],
+        "metadata": { "command": "raw-secret command" },
+        "always": [],
+        "tool": { "messageID": "msg_115w", "callID": "call_115w" }
+      }
+    },
+    {
+      "type": "permission.replied",
+      "properties": { "sessionID": "ses_115wait", "requestID": "per_115a", "reply": "once" }
+    },
+    {
+      "type": "message.updated",
+      "properties": {
+        "info": {
+          "id": "msg_115w",
+          "sessionID": "ses_115wait",
+          "role": "assistant",
+          "finish": "stop",
+          "time": { "created": 1761500000000, "completed": 1761500009000 }
+        }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_115wait", "status": { "type": "idle" } }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "version": "1.18.5",
+  "expected": ["claim", "start", "finish:failed"],
+  "events": [
+    {
+      "type": "session.created",
+      "properties": { "info": { "id": "ses_185fail", "directory": "/work" } }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185fail", "status": { "type": "busy" } }
+    },
+    {
+      "type": "message.updated",
+      "properties": {
+        "info": {
+          "id": "msg_185f",
+          "sessionID": "ses_185fail",
+          "role": "assistant",
+          "error": {
+            "name": "MessageAbortedError",
+            "data": { "message": "raw-secret aborted text" }
+          },
+          "time": { "created": 1761500000000 }
+        }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185fail", "status": { "type": "idle" } }
+    }
+  ]
+}

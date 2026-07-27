@@ -1,0 +1,67 @@
+{
+  "version": "1.18.5",
+  "expected": ["claim", "start", "finish:completed"],
+  "events": [
+    {
+      "type": "session.created",
+      "properties": { "info": { "id": "ses_185root", "directory": "/work" } }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185root", "status": { "type": "busy" } }
+    },
+    {
+      "type": "session.status",
+      "properties": {
+        "sessionID": "ses_185root",
+        "status": {
+          "type": "retry",
+          "attempt": 1,
+          "message": "raw-secret retry text",
+          "next": 1761500003000
+        }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185root", "status": { "type": "busy" } }
+    },
+    {
+      "type": "session.created",
+      "properties": {
+        "info": { "id": "ses_185child", "parentID": "ses_185root", "directory": "/work" }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185child", "status": { "type": "busy" } }
+    },
+    {
+      "type": "session.error",
+      "properties": {
+        "sessionID": "ses_185child",
+        "error": { "name": "UnknownError", "data": { "message": "raw-secret subagent text" } }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185child", "status": { "type": "idle" } }
+    },
+    {
+      "type": "message.updated",
+      "properties": {
+        "info": {
+          "id": "msg_185a",
+          "sessionID": "ses_185root",
+          "role": "assistant",
+          "finish": "stop",
+          "time": { "created": 1761500000000, "completed": 1761500008000 }
+        }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185root", "status": { "type": "idle" } }
+    }
+  ]
+}

@@ -5,10 +5,11 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "./test/acceptance.sh && ./test/package-pi.sh",
+    "test": "./test/acceptance.sh && ./test/package-pi.sh && ./test/package-opencode.sh",
     "test:core": "./test/state-core.sh",
     "test:pi": "node ./test/pi-adapter.mjs && node ./test/lifecycle.mjs",
-    "test:package": "./test/package-pi.sh"
+    "test:opencode": "node ./test/opencode-adapter.mjs && node ./test/opencode-lifecycle.mjs",
+    "test:package": "./test/package-pi.sh && ./test/package-opencode.sh"
   },
   "devDependencies": {
     "typescript": "5.9.3"

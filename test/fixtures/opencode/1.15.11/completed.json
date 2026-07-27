@@ -1,0 +1,32 @@
+{
+  "version": "1.15.11",
+  "expected": ["claim", "start", "finish:completed"],
+  "events": [
+    {
+      "type": "session.created",
+      "properties": {
+        "info": { "id": "ses_115root", "directory": "/work", "title": "raw-secret prompt title" }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_115root", "status": { "type": "busy" } }
+    },
+    {
+      "type": "message.updated",
+      "properties": {
+        "info": {
+          "id": "msg_115a",
+          "sessionID": "ses_115root",
+          "role": "assistant",
+          "finish": "stop",
+          "time": { "created": 1761500000000, "completed": 1761500002000 }
+        }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_115root", "status": { "type": "idle" } }
+    }
+  ]
+}

@@ -15,12 +15,13 @@ There is no background daemon. Native adapters send bounded lifecycle events to 
 ## Requirements
 
 - tmux 3.0 or newer on Linux or macOS
-- [Pi](https://github.com/badlogic/pi-mono) 0.81.1 or newer, running in TUI mode
-- Pi must run directly inside a tmux pane
+- At least one supported agent, running directly inside a tmux pane:
+  - [Pi](https://github.com/badlogic/pi-mono) 0.81.1 or newer, in TUI mode
+  - [OpenCode](https://opencode.ai) 1.15.11 or newer
 
 ## Install
 
-The canonical tmux core and at least one native agent adapter are required. Pi is the adapter implemented in this checkout.
+The canonical tmux core and at least one native agent adapter are required. Pi and OpenCode are the adapters implemented in this checkout. Install only the adapters you use; each one has its own package lifecycle and never touches another agent's configuration.
 
 ### 1. Install the tmux plugin
 
@@ -58,7 +59,19 @@ pi install ./packages/pi
 
 Then enter `/reload` in Pi, or restart Pi. The package contains only the Pi adapter; it discovers and invokes the canonical core loaded by tmux and becomes a no-op when that core is missing or protocol-incompatible.
 
-The extension runs as your user. Install it only from source you trust.
+### 3. Install the OpenCode plugin
+
+Until the OpenCode adapter is published, register its independently versioned package directory from this checkout:
+
+```sh
+opencode plugin --global /absolute/path/to/tmux-agents-status/packages/opencode
+```
+
+Restart OpenCode. The package contains only the OpenCode adapter and discovers the same canonical core. Re-run the command with `--force` to move a registered entry to a newer package spec.
+
+OpenCode has no plugin removal command yet. To uninstall, remove only that package entry from the `plugin` array in `~/.config/opencode/opencode.json`.
+
+Adapters run as your user. Install them only from source you trust.
 
 ## Add the status fragments
 
@@ -166,6 +179,10 @@ Pi `/reload` keeps the current status. Starting a new, resumed, or forked Pi ses
 
 Pi reports exact `running` from accepted `agent_start` through `agent_settled`. Settled `stop` and terminal `toolUse` outcomes map approximately to `completed`; settled `error`, `length`, and `aborted` outcomes map approximately to `failed`. Retries, compaction, tools, and queued continuations stay running until settlement. Generic Pi waits are unsupported and are never inferred.
 
+OpenCode reports exact `running` while its root session is busy, exact `waiting` while permission or question requests are pending, exact `completed` when the session goes idle without failure evidence, and exact `failed` when the session ends with typed error, abort, or rejection evidence. Retries stay running. Subagent and background child sessions never take the pane over. Starting work in another root session replaces the pane status; merely selecting a different already-idle session is not reported by OpenCode and leaves the status unchanged until that session works again. Quitting OpenCode releases the pane, and abandoned work is reported as failed.
+
+An OpenCode turn that continues after a rejected request, which its non-default continued-on-deny behavior allows, is reported as completed once its assistant message settles normally.
+
 Adapters and the core exchange protocol major 2 lifecycle identifiers only. They do not inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content. v1, future-version, malformed, and oversized tmux records are ignored.
 
 ## Uninstall the tmux core
@@ -184,16 +201,17 @@ The command prints the exact plugin declaration and status-fragment strings to r
 
 If nothing appears:
 
-1. Confirm both the tmux plugin and Pi extension are installed.
+1. Confirm both the tmux plugin and your agent's adapter are installed.
 2. Confirm both exact fragment strings were added to `~/.tmux.conf`.
 3. Run `tmux source-file "$HOME/.tmux.conf"`.
-4. Enter `/reload` in Pi.
-5. Start a Pi turn inside tmux and allow about one second for the first update.
+4. Enter `/reload` in Pi, or restart OpenCode.
+5. Start a turn inside tmux and allow about one second for the first update.
 
-The extension is intentionally inactive outside tmux and in Pi print, JSON, or RPC modes.
+The adapters are intentionally inactive outside tmux, in Pi print, JSON, or RPC modes, and wherever the core is missing or protocol-incompatible.
 
 ## Limitations
 
 - One directly running main agent per pane is supported; subagents and background work do not take pane ownership.
 - The agent and tmux must run on the same host.
+- OpenCode reports the same lifecycle from any pane it runs in, including non-interactive commands; it exposes no native signal that separates them.
 - Nested tmux, SSH aggregation, and Windows are not supported.

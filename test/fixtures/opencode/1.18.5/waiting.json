@@ -1,0 +1,60 @@
+{
+  "version": "1.18.5",
+  "expected": [
+    "claim",
+    "start",
+    "wait-open:per_185a",
+    "wait-open:qst_185a",
+    "wait-close:per_185a",
+    "wait-close:qst_185a",
+    "finish:failed"
+  ],
+  "events": [
+    {
+      "type": "session.created",
+      "properties": { "info": { "id": "ses_185wait", "directory": "/work" } }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185wait", "status": { "type": "busy" } }
+    },
+    {
+      "type": "permission.asked",
+      "properties": {
+        "id": "per_185a",
+        "sessionID": "ses_185wait",
+        "permission": "edit",
+        "patterns": ["raw-secret path"],
+        "metadata": { "diff": "raw-secret diff" },
+        "always": []
+      }
+    },
+    {
+      "type": "question.asked",
+      "properties": {
+        "id": "qst_185a",
+        "sessionID": "ses_185wait",
+        "questions": [
+          {
+            "question": "raw-secret question",
+            "header": "raw-secret header",
+            "options": [{ "label": "raw-secret option", "description": "raw-secret description" }],
+            "multiple": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "permission.replied",
+      "properties": { "sessionID": "ses_185wait", "requestID": "per_185a", "reply": "reject" }
+    },
+    {
+      "type": "question.rejected",
+      "properties": { "sessionID": "ses_185wait", "requestID": "qst_185a" }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_185wait", "status": { "type": "idle" } }
+    }
+  ]
+}

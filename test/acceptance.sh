@@ -38,6 +38,8 @@ server_option() {
 
 node "$root/test/pi-adapter.mjs"
 node "$root/test/lifecycle.mjs"
+node "$root/test/opencode-adapter.mjs"
+node "$root/test/opencode-lifecycle.mjs"
 "$root/test/state-core.sh"
 "$root/test/acknowledge.sh"
 "$root/test/client-attachment.sh"

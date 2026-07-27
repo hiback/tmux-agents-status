@@ -103,10 +103,15 @@ core 2 finish "$owner" "$turn" completed
 assert_equal "$completed" "$(option "$state_option")" 'a replayed finish does not re-arm the outcome'
 core 2 start "$owner" "$turn"
 assert_equal "$completed" "$(option "$state_option")" 'an exact terminal turn cannot be reopened directly'
+foreign=pi:88888888-8888-4888-8888-888888888888
+core 2 dismiss-terminal "$foreign"
+assert_equal "$completed" "$(option "$state_option")" 'dismissal from a foreign owner is rejected'
 core 2 dismiss-terminal "$owner"
 assert_equal "v2|$owner|pid:$$|$turn|none|-|-|-" "$(option "$state_option")" 'approved repair can dismiss an obsolete terminal state'
 core 2 start "$owner" "$turn"
 assert_equal "$running" "$(option "$state_option")" 'dismissal allows approved same-turn activity to resume running'
+core 2 dismiss-terminal "$owner"
+assert_equal "$running" "$(option "$state_option")" 'dismissal never clears non-terminal state'
 
 old_turn=t:33333333-3333-4333-8333-333333333333
 core 2 start "$owner" "$old_turn"

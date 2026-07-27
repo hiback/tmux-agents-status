@@ -1,0 +1,25 @@
+{
+  "version": "1.15.11",
+  "expected": ["claim", "start", "finish:failed"],
+  "events": [
+    {
+      "type": "session.created",
+      "properties": { "info": { "id": "ses_115fail", "directory": "/work" } }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_115fail", "status": { "type": "busy" } }
+    },
+    {
+      "type": "session.error",
+      "properties": {
+        "sessionID": "ses_115fail",
+        "error": { "name": "ProviderAuthError", "data": { "message": "raw-secret provider text" } }
+      }
+    },
+    {
+      "type": "session.status",
+      "properties": { "sessionID": "ses_115fail", "status": { "type": "idle" } }
+    }
+  ]
+}
