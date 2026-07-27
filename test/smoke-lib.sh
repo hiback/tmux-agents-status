@@ -44,7 +44,8 @@ EOF
 
 smoke_end() {
 	tmux -L "$smoke_socket" kill-server >/dev/null 2>&1 || :
-	rm -rf "$smoke_tmp"
+	# A dying agent can still be writing into its isolated home.
+	rm -rf "$smoke_tmp" 2>/dev/null || :
 }
 
 smoke_versions() {
@@ -90,16 +91,19 @@ smoke_await() {
 	done
 }
 
+# The liveness pattern is per adapter: the npm adapters project a process pid,
+# while a hook adapter has no long-lived process identity to report.
 smoke_await_claim() {
 	prefix=$1
 	limit=$2
+	liveness=$3
 	deadline=$(($(date +%s) + limit))
 	while :; do
 		owner=$(smoke_field 2)
 		case $owner in
 		"$prefix":?*)
 			case $(smoke_field 3) in
-			pid:[1-9]*)
+			$liveness)
 				smoke_ok 'a direct launch discovers the core and claims its pane'
 				return 0
 				;;

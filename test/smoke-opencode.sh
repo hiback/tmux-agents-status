@@ -44,7 +44,7 @@ grep -Fq "$package" "$config" || smoke_fail 'the staged artifact registers nativ
 smoke_ok 'the staged artifact registers through opencode plugin --global'
 
 smoke_launch "exec opencode --model '$TAS_SMOKE_MODEL'"
-smoke_await_claim opencode 120
+smoke_await_claim opencode 120 'pid:[1-9]*'
 
 smoke_type 'Run the shell command true, then reply with the single word ready.'
 smoke_await running 60 'an OpenCode turn reports exact running'

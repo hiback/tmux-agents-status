@@ -38,7 +38,7 @@ pi list | grep -Fq "$package" || smoke_fail 'the staged artifact installs native
 smoke_ok 'the staged artifact installs through pi install'
 
 smoke_launch "exec pi --model '$TAS_SMOKE_MODEL'"
-smoke_await_claim pi 120
+smoke_await_claim pi 120 'pid:[1-9]*'
 
 smoke_type 'Reply with the single word ready and nothing else.'
 smoke_await running 60 'a Pi turn reports exact running'
