@@ -1,0 +1,22 @@
+name: Release OpenCode adapter
+
+on:
+  push:
+    tags: ["opencode-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    # Forks carry neither the protected environment nor its credentials; the
+    # guard keeps a fork's own tag from starting a publication attempt at all.
+    if: github.repository == 'hiback/tmux-agents-status'
+    uses: ./.github/workflows/release-npm-adapter.yml
+    with:
+      adapter: opencode
+      package: tmux-agents-status-opencode
+      environment: opencode-release
+      agent: opencode-ai
+      model: anthropic/claude-haiku-4-5
+    secrets: inherit

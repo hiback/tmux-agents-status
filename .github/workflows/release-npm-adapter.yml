@@ -1,0 +1,160 @@
+name: Release npm adapter
+
+# One release path shared by both npm adapters. Each caller is triggered by its
+# own tag and runs in its own protected environment, so one adapter's gates,
+# failures, or release state can neither block nor publish the other.
+on:
+  workflow_call:
+    inputs:
+      adapter:
+        description: Workspace directory under packages/
+        required: true
+        type: string
+      package:
+        description: Published npm package name
+        required: true
+        type: string
+      environment:
+        description: Protected environment holding this adapter's credentials
+        required: true
+        type: string
+      agent:
+        description: npm package providing the agent CLI for real-agent smoke
+        required: true
+        type: string
+      model:
+        description: provider/model used by the smoke turns
+        required: true
+        type: string
+    secrets:
+      NPM_TOKEN:
+        required: true
+      SMOKE_ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Three lanes of the full deterministic suite, which already contains every
+  # adapter fixture and every package check.
+  deterministic:
+    uses: ./.github/workflows/ci.yml
+
+  # Builds the published artifact exactly once. Every later job consumes this
+  # upload, so nothing that is smoke tested is rebuilt before publication.
+  stage:
+    runs-on: ubuntu-latest
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      previous: ${{ steps.previous.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify the tag matches the adapter manifest
+        env:
+          ADAPTER: ${{ inputs.adapter }}
+        run: |
+          version=$(node -p "require('./packages/$ADAPTER/package.json').version")
+          [ "$GITHUB_REF_NAME" = "$ADAPTER-v$version" ] || {
+            echo "tag $GITHUB_REF_NAME does not match manifest version $version" >&2
+            exit 1
+          }
+
+      - name: Build the artifact
+        id: pack
+        env:
+          ADAPTER: ${{ inputs.adapter }}
+        run: |
+          npm pack --silent --workspace "packages/$ADAPTER" --pack-destination "$RUNNER_TEMP/staged"
+          set -- "$RUNNER_TEMP/staged"/*.tgz
+          [ "$#" -eq 1 ] || { echo 'npm pack produced more than one artifact' >&2; exit 1; }
+          echo "tarball=$(basename "$1")" >>"$GITHUB_OUTPUT"
+
+      # An empty result means a first release, which skips only the update case.
+      - name: Resolve the previous public version
+        id: previous
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: echo "version=$(npm view "$PACKAGE" version 2>/dev/null || :)" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-${{ inputs.adapter }}
+          path: ${{ runner.temp }}/staged/*.tgz
+          retention-days: 7
+
+  # Credentialed real-agent lanes. They install the staged artifact through the
+  # agent's own mechanism, launch the agent directly in a real tmux pane, and
+  # inspect plugin-owned tmux metadata only.
+  smoke:
+    needs: [deterministic, stage]
+    runs-on: ${{ matrix.os }}
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-tmux
+        with:
+          version: current
+
+      - name: Install the agent
+        env:
+          AGENT: ${{ inputs.agent }}
+        run: npm install --global "$AGENT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-${{ inputs.adapter }}
+          path: ${{ runner.temp }}/staged
+
+      - name: Unpack the staged artifact
+        env:
+          TARBALL: ${{ needs.stage.outputs.tarball }}
+        run: tar -xzf "$RUNNER_TEMP/staged/$TARBALL" -C "$RUNNER_TEMP/staged"
+
+      - name: Smoke the staged artifact through the real agent
+        env:
+          ADAPTER: ${{ inputs.adapter }}
+          TAS_SMOKE_MODEL: ${{ inputs.model }}
+          ANTHROPIC_API_KEY: ${{ secrets.SMOKE_ANTHROPIC_API_KEY }}
+          # One lane exercises the native update path; a first release has no
+          # previous public version to update from.
+          PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
+        run: |
+          tmux -V
+          "./test/smoke-$ADAPTER.sh" "$RUNNER_TEMP/staged/package" "$PREVIOUS"
+
+  # Publishes the same artifact the lanes installed, without rebuilding it.
+  publish:
+    needs: [stage, smoke]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-${{ inputs.adapter }}
+          path: ${{ runner.temp }}/staged
+
+      - name: Publish the staged artifact
+        env:
+          TARBALL: ${{ needs.stage.outputs.tarball }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "$RUNNER_TEMP/staged/$TARBALL" --access public
