@@ -51,15 +51,30 @@ Add this line to `~/.tmux.conf`:
 run-shell ~/.tmux/plugins/tmux-agents-status/tmux-agents-status.tmux
 ```
 
+#### Update
+
+With TPM, press `prefix` + `U` and select the plugin. Without TPM, pull the clone:
+
+```sh
+git -C "$HOME/.tmux/plugins/tmux-agents-status" pull
+```
+
+Then run `tmux source-file "$HOME/.tmux.conf"`. Reloading is idempotent.
+
 ### 2. Install the Pi extension
 
 Until the Pi adapter is published, install its independently versioned package directory from this checkout:
 
 ```sh
-pi install ./packages/pi
+pi install /absolute/path/to/tmux-agents-status/packages/pi
 ```
 
-Then enter `/reload` in Pi, or restart Pi. The package contains only the Pi adapter; it discovers and invokes the canonical core loaded by tmux and becomes a no-op when that core is missing or protocol-incompatible.
+Then enter `/reload` in Pi, or restart Pi. Pi owns the package lifecycle:
+
+```sh
+pi update --extensions
+pi remove /absolute/path/to/tmux-agents-status/packages/pi
+```
 
 ### 3. Install the OpenCode plugin
 
@@ -69,7 +84,7 @@ Until the OpenCode adapter is published, register its independently versioned pa
 opencode plugin --global /absolute/path/to/tmux-agents-status/packages/opencode
 ```
 
-Restart OpenCode. The package contains only the OpenCode adapter and discovers the same canonical core. Re-run the command with `--force` to move a registered entry to a newer package spec.
+Restart OpenCode. Re-run the command with `--force` to move a registered entry to a newer package spec.
 
 OpenCode has no plugin removal command yet. To uninstall, remove only that package entry from the `plugin` array in `~/.config/opencode/opencode.json`.
 
@@ -82,7 +97,7 @@ claude plugin marketplace add hiback/tmux-agents-status
 claude plugin install tmux-agents-status@tmux-agents-status --scope user
 ```
 
-Start or restart Claude Code inside tmux. The marketplace contains only the Claude Code adapter; its hooks discover the same canonical core and become a no-op when that core is missing or protocol-incompatible. Claude Code owns enablement, caching, updates, and removal:
+Start or restart Claude Code inside tmux. Claude Code owns enablement, caching, updates, and removal:
 
 ```sh
 claude plugin update tmux-agents-status@tmux-agents-status --scope user
@@ -197,14 +212,14 @@ Available options:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `@tmux-agents-status-running-glyph` | `•` | Active turn |
-| `@tmux-agents-status-running-style` | `fg=cyan` | Active-turn style |
-| `@tmux-agents-status-waiting-glyph` | `?` | Waiting state |
-| `@tmux-agents-status-waiting-style` | `fg=yellow` | Waiting-state style |
-| `@tmux-agents-status-completed-glyph` | `✓` | Completed turn |
-| `@tmux-agents-status-completed-style` | `fg=green` | Completed-turn style |
-| `@tmux-agents-status-failed-glyph` | `!` | Failed or cancelled turn |
-| `@tmux-agents-status-failed-style` | `fg=red` | Failed-turn style |
+| `@tmux-agents-status-running-glyph` | `•` | Working |
+| `@tmux-agents-status-running-style` | `fg=cyan` | Working style |
+| `@tmux-agents-status-waiting-glyph` | `?` | Waiting |
+| `@tmux-agents-status-waiting-style` | `fg=yellow` | Waiting style |
+| `@tmux-agents-status-completed-glyph` | `✓` | Finished |
+| `@tmux-agents-status-completed-style` | `fg=green` | Finished style |
+| `@tmux-agents-status-failed-glyph` | `!` | Failed |
+| `@tmux-agents-status-failed-style` | `fg=red` | Failed style |
 | `@tmux-agents-status-unread-style` | `reverse,bold` | Added to unread results |
 
 Set a glyph to an empty string to hide that state. Styles use tmux syntax without the surrounding `#[...]`.
@@ -213,21 +228,18 @@ Set a glyph to an empty string to hide that state. Styles use tmux syntax withou
 
 The window fragment shows one symbol for each tracked agent pane in the current tmux window. A waiting, finished, or failed symbol remains visible, while unread styling disappears after you visit the pane.
 
-The other-session fragment shows active turns and unread results from other tmux sessions. Panes linked to the current session are not counted twice.
+The other-session fragment shows active turns and unread results from other tmux sessions. Panes linked to the current session are not counted twice. Closing a pane removes its status, and starting a new, resumed, or forked session replaces it.
 
-Pi `/reload` keeps the current status. Starting a new, resumed, or forked Pi session replaces ownership and clears the old status until the next turn begins. Closing a pane removes its status.
+What actually appears depends on the lifecycle events each agent exposes:
 
-Pi reports exact `running` from accepted `agent_start` through `agent_settled`. Settled `stop` and terminal `toolUse` outcomes map approximately to `completed`; settled `error`, `length`, and `aborted` outcomes map approximately to `failed`. Retries, compaction, tools, and queued continuations stay running until settlement. Generic Pi waits are unsupported and are never inferred.
+| Agent | Working | Waiting | Finished | Failed |
+| --- | --- | --- | --- | --- |
+| Pi | yes | not reported | yes | yes |
+| OpenCode | yes | yes | yes | yes |
+| Claude Code | yes | yes | yes | API errors only |
+| Codex | yes | approvals only | yes | not reported |
 
-OpenCode reports exact `running` while its root session is busy, exact `waiting` while permission or question requests are pending, exact `completed` when the session goes idle without failure evidence, and exact `failed` when the session ends with typed error, abort, or rejection evidence. Retries stay running. Subagent and background child sessions never take the pane over. Starting work in another root session replaces the pane status; merely selecting a different already-idle session is not reported by OpenCode and leaves the status unchanged until that session works again. Quitting OpenCode releases the pane, and abandoned work is reported as failed.
-
-An OpenCode turn that continues after a rejected request, which its non-default continued-on-deny behavior allows, is reported as completed once its assistant message settles normally.
-
-Claude Code reports approximate `running` from prompt submission and later foreground tool activity, approximate `waiting` from permission and question hooks, exact `waiting` for paired MCP elicitation, approximate `completed` from main-agent stop or idle-prompt evidence, and exact `failed` only for terminal API errors. Later foreground activity repairs approximate waiting and completion, while an exact failure stays final. User cancellation and all other failure classes are unsupported and never invent a terminal state. Subagent activity never takes the pane over, and `/resume` or `/clear` replaces pane ownership. Because Claude Code exposes no reliable long-lived process identity, abrupt termination may leave stale state until graceful session end, a later session claim, or pane exit.
-
-Codex reports approximate `running` from prompt submission and later foreground tool activity, approximate `waiting` for native approval requests only, and approximate `completed` from main-agent stop or agent-turn-complete evidence. Later foreground activity in the same turn repairs approximate waiting and completion, and a later turn supersedes them. `failed` is unsupported: Codex exposes no native failure or cancellation evidence for a directly running TUI, so a failed or cancelled turn keeps its last reported state until the next prompt or session end. Waiting is reported when Codex asks for approval, before any decision is made, so a request that one of your other hooks answers automatically is briefly reported as waiting until the next activity repairs it. Commands that need no approval, including under a permission mode that skips prompts, are never reported as waiting. Subagent activity never takes the pane over, `/clear` and resume replace pane ownership, and compaction does not. Because Codex exposes no reliable long-lived process identity, abrupt termination may leave stale state until graceful session end, a later session claim, or pane exit.
-
-Adapters and the core exchange protocol major 2 lifecycle identifiers only. They do not inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content. v1, future-version, malformed, and oversized tmux records are ignored.
+Where an agent reports nothing, this plugin shows nothing rather than guessing, so a state marked "not reported" simply keeps the previous symbol until the next event. Adapters and the core exchange lifecycle identifiers only. They never inspect or persist prompts, responses, tool arguments, transcripts, model text, or pane content.
 
 ## Uninstall the tmux core
 
@@ -237,7 +249,7 @@ Run the core cleanup while the checkout still exists:
 ~/.tmux/plugins/tmux-agents-status/scripts/uninstall
 ```
 
-The command removes only live tmux state owned by this plugin: its hook entries and markers, defaults recorded as plugin-owned, pane records and acknowledgements, protocol metadata, and root metadata. It is safe to run repeatedly. It does not edit `~/.tmux.conf`, status formats, or other user hooks and options. Changed, pre-existing, or unmarked legacy option values are retained as user-owned live configuration.
+The command removes only live tmux state that this plugin created. It is safe to run repeatedly, never edits `~/.tmux.conf`, your status formats, or other user hooks, and keeps any option value you set or changed yourself.
 
 The command prints the exact plugin declaration and status-fragment strings to remove manually from your tmux configuration. Remove the applicable lines and fragments, then remove the checkout through TPM or delete the manual clone. Native agent adapters have separate package lifecycles and are not removed by this core command.
 
