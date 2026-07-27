@@ -170,7 +170,7 @@ mkdir "$tmp/fake-tmux-3.0"
 cat >"$tmp/fake-tmux-3.0/tmux" <<'EOF'
 #!/bin/sh
 case "$1:$2" in
-display-message:-p) printf '3.0\n' ;;
+-V:) printf 'tmux 3.0\n' ;;
 show-option:-s|show-option:-sqv) : ;;
 *) printf '%s\n' "$*" >>"$FAKE_TMUX_LOG" ;;
 esac

@@ -190,8 +190,8 @@ fi
 	printf '\n'
 } >>"$FAKE_TMUX_LOG"
 case $1:$2 in
-display-message:-p)
-	printf '3.6\n'
+-V:)
+	printf 'tmux 3.6\n'
 	;;
 list-clients:-F)
 	case $3 in

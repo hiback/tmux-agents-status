@@ -496,8 +496,8 @@ assert_fake_other good topology '' 'a required topology query failure fails clos
 
 cat >"$tmp/tmux" <<'EOF'
 #!/bin/sh
-if [ "$1" = 'display-message' ]; then
-    printf '2.9\n'
+if [ "$1" = '-V' ]; then
+    printf 'tmux 2.9\n'
     exit 0
 fi
 printf '%s\n' "$*" >>"$FAKE_TMUX_LOG"

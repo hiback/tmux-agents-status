@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-version=$(tmux display-message -p '#{version}')
+# Config-load time has no current target on tmux 3.0, so the version cannot be
+# read through a format.
+version=$(tmux -V)
+version=${version#tmux }
 major=${version%%.*}
 case $major in
     '' | *[!0-9]*) supported=false ;;
