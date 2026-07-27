@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic:
+    name: ${{ matrix.lane }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: linux-tmux-current
+            os: ubuntu-latest
+            tmux: current
+          - lane: macos-tmux-current
+            os: macos-latest
+            tmux: current
+          # The advertised floor, built from source so it stays executable.
+          - lane: linux-tmux-3.0
+            os: ubuntu-latest
+            tmux: "3.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-tmux
+        with:
+          version: ${{ matrix.tmux }}
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # Isolation comes after `npm ci` so installation still uses the runner's
+      # own home, while every tmux server, socket, and configuration file the
+      # tests create stays out of the runner's shared state.
+      - name: Isolate the test environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/isolated-home" "$RUNNER_TEMP/isolated-tmp"
+          {
+            echo "HOME=$RUNNER_TEMP/isolated-home"
+            echo "TMPDIR=$RUNNER_TEMP/isolated-tmp"
+          } >>"$GITHUB_ENV"
+
+      - name: Run the deterministic suite
+        run: |
+          tmux -V
+          npm test
+
+      # Every lane, so the floor lane exercises the config-load path that only a
+      # real `~/.tmux.conf` reaches.
+      - name: Verify the released core installs and removes cleanly
+        run: npm run test:core-release

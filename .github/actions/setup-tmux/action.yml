@@ -1,0 +1,42 @@
+name: Set up tmux
+description: Installs the platform's current tmux, or builds and caches a pinned release.
+
+inputs:
+  version:
+    description: A tmux release to build, or "current" for the platform package.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install current tmux
+      if: inputs.version == 'current'
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = macOS ]; then
+          brew install tmux
+        else
+          sudo apt-get update
+          sudo apt-get install -y tmux
+        fi
+
+    - name: Restore pinned tmux
+      if: inputs.version != 'current'
+      id: pinned
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/tmux-${{ inputs.version }}
+        key: tmux-${{ inputs.version }}-${{ runner.os }}-${{ hashFiles('.github/scripts/build-tmux.sh') }}
+
+    - name: Build pinned tmux
+      if: inputs.version != 'current' && steps.pinned.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libevent-dev libncurses-dev pkg-config
+        ./.github/scripts/build-tmux.sh '${{ inputs.version }}' '${{ runner.temp }}/tmux-${{ inputs.version }}'
+
+    - name: Use pinned tmux
+      if: inputs.version != 'current'
+      shell: bash
+      run: echo '${{ runner.temp }}/tmux-${{ inputs.version }}/bin' >>"$GITHUB_PATH"

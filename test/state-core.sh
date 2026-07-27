@@ -171,6 +171,7 @@ refresh_owner=pi:66666666-6666-4666-8666-666666666666
 refresh_turn=t:77777777-7777-4777-8777-777777777777
 core 2 claim "$refresh_owner" "pid:$$"
 mkdir "$tmp/refresh-failing-bin"
+real_tmux=$(command -v tmux)
 cat >"$tmp/refresh-failing-bin/tmux" <<'EOF'
 #!/bin/sh
 case $1:$2 in
@@ -184,12 +185,12 @@ refresh-client:-S)
 	printf '<refresh>\n' >>"$FAKE_REFRESH_LOG"
 	exit 1
 	;;
-*) exec /usr/bin/tmux "$@" ;;
+*) exec "$REAL_TMUX" "$@" ;;
 esac
 EOF
 chmod +x "$tmp/refresh-failing-bin/tmux"
 : >"$tmp/refresh-log"
-PATH="$tmp/refresh-failing-bin:$PATH" FAKE_REFRESH_LOG="$tmp/refresh-log" \
+PATH="$tmp/refresh-failing-bin:$PATH" FAKE_REFRESH_LOG="$tmp/refresh-log" REAL_TMUX="$real_tmux" \
 	TMUX="$server_tmux" TMUX_PANE="$pane" "$root/scripts/state-core" \
 	2 start "$refresh_owner" "$refresh_turn" >"$tmp/refresh-out" 2>"$tmp/refresh-error"
 assert_equal "v2|$refresh_owner|pid:$$|$refresh_turn|running|-|-|-" "$(option "$state_option")" 'refresh failure never rolls back a persisted lifecycle mutation'
@@ -197,7 +198,7 @@ assert_equal '' "$(cat "$tmp/refresh-out")" 'refresh failure exposes no stdout'
 assert_equal 'tmux-agents-status: state-core: refresh failed' "$(cat "$tmp/refresh-error")" 'refresh failure has one bounded content-free diagnostic'
 assert_equal '1' "$(wc -l <"$tmp/refresh-log" | tr -d ' ')" 'an accepted visible mutation attempts one refresh'
 : >"$tmp/refresh-log"
-PATH="$tmp/refresh-failing-bin:$PATH" FAKE_REFRESH_LOG="$tmp/refresh-log" \
+PATH="$tmp/refresh-failing-bin:$PATH" FAKE_REFRESH_LOG="$tmp/refresh-log" REAL_TMUX="$real_tmux" \
 	TMUX="$server_tmux" TMUX_PANE="$pane" "$root/scripts/state-core" \
 	2 finish "$owner" "$refresh_turn" failed >"$tmp/rejected-out" 2>"$tmp/rejected-error"
 assert_equal '' "$(cat "$tmp/rejected-error")" 'a rejected stale-owner mutation remains silent'

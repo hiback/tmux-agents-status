@@ -34,16 +34,21 @@ server_option() {
 	tmux_test show-option -sqv "$1"
 }
 
-assert_absent_global() {
-	if tmux_test show-options -g "$1" >/dev/null 2>&1; then
-		fail "$2"
+# tmux 3.0 reports an absent user option as success with no output, while newer
+# tmux fails the query outright. A present option always echoes its own name, so
+# empty output still distinguishes absence from an option set to an empty value.
+assert_absent_option() {
+	if value=$(tmux_test show-options "$1" "$2" 2>/dev/null) && [ -n "$value" ]; then
+		fail "$3"
 	fi
 }
 
+assert_absent_global() {
+	assert_absent_option -g "$1" "$2"
+}
+
 assert_absent_server() {
-	if tmux_test show-options -s "$1" >/dev/null 2>&1; then
-		fail "$2"
-	fi
+	assert_absent_option -s "$1" "$2"
 }
 
 tmux_test -f /dev/null new-session -d -s uninstall

@@ -1,0 +1,34 @@
+name: Release core
+
+# The core is distributed as this repository's checkout, so publication is a
+# GitHub release on a tag. It runs no credentialed real-agent smoke: the
+# normalized executable seam makes deterministic verification sufficient for
+# core changes.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # Three lanes of the deterministic suite, every adapter fixture, every package
+  # check, and the core release gate on Linux, macOS, and the tmux 3.0 floor.
+  deterministic:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: deterministic
+    runs-on: ubuntu-latest
+    # A protected environment keeps publication reachable only after the gates
+    # pass. Its reviewers and the tag ruleset are GitHub settings, not files.
+    environment: core-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
