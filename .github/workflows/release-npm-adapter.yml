@@ -78,6 +78,7 @@ jobs:
         env:
           ADAPTER: ${{ inputs.adapter }}
         run: |
+          mkdir -p "$RUNNER_TEMP/staged"
           npm pack --silent --workspace "packages/$ADAPTER" --pack-destination "$RUNNER_TEMP/staged"
           set -- "$RUNNER_TEMP/staged"/*.tgz
           [ "$#" -eq 1 ] || { echo 'npm pack produced more than one artifact' >&2; exit 1; }
