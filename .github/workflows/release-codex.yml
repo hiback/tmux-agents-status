@@ -33,11 +33,11 @@ jobs:
       hook: ${{ steps.review.outputs.hook }}
       previous: ${{ steps.previous.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: codex-hook-trust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The approval itself is the review; this only proves the tag still holds
       # what `stage` printed for it.
@@ -149,9 +149,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -200,7 +200,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify the tag still resolves to the staged contents
         env:
