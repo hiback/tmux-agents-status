@@ -93,11 +93,14 @@ jobs:
             echo "hook=$hook"
           } >>"$GITHUB_OUTPUT"
 
-      # An empty result means a first release, which skips only the update case.
+      # The immediate predecessor rather than the highest tag, so a patch
+      # released onto an older line still updates from what its users have. An
+      # empty result means a first release, which skips only the update case.
       - name: Stage the previous public version
         id: previous
         run: |
-          tag=$(git tag --list 'codex-v*' --sort=-v:refname | grep -Fvx "$GITHUB_REF_NAME" | head -n 1)
+          tag=$(git tag --list 'codex-v*' --sort=v:refname |
+            awk -v cur="$GITHUB_REF_NAME" '$0 == cur { print prev; found = 1; exit } { prev = $0 } END { exit !found }')
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
           [ -n "$tag" ] || exit 0
           git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" "$tag" .agents/plugins packages/codex
