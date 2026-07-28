@@ -91,7 +91,7 @@ jobs:
           PACKAGE: ${{ inputs.package }}
         run: echo "version=$(npm view "$PACKAGE" version 2>/dev/null || :)" >>"$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: staged-${{ inputs.adapter }}
           path: ${{ runner.temp }}/staged/*.tgz
@@ -124,7 +124,7 @@ jobs:
           AGENT: ${{ inputs.agent }}
         run: npm install --global "$AGENT"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: staged-${{ inputs.adapter }}
           path: ${{ runner.temp }}/staged
@@ -143,6 +143,10 @@ jobs:
           # previous public version to update from.
           PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
         run: |
+          [ -n "$OPENAI_API_KEY" ] || {
+            echo "$ADAPTER release environment does not define SMOKE_OPENAI_API_KEY" >&2
+            exit 1
+          }
           tmux -V
           "./test/smoke-$ADAPTER.sh" "$RUNNER_TEMP/staged/package" "$PREVIOUS"
 
@@ -164,7 +168,7 @@ jobs:
           node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: staged-${{ inputs.adapter }}
           path: ${{ runner.temp }}/staged

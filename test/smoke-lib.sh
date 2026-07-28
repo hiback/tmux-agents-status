@@ -38,8 +38,15 @@ run-shell $smoke_plugin/tmux-agents-status.tmux
 EOF
 	smoke_tmux -f "$smoke_home/.tmux.conf" new-session -d -s smoke
 	smoke_tmux set-environment -g HOME "$smoke_home"
-	[ "$(smoke_tmux show-option -gqv @tmux-agents-status-root)" = "$smoke_plugin" ] ||
-		smoke_fail 'the smoke tmux server loaded the candidate core'
+
+	# Config-file run-shell can finish after new-session returns, notably on
+	# Homebrew's tmux 3.7. Poll plugin-owned metadata rather than racing it.
+	deadline=$(($(date +%s) + 10))
+	while [ "$(smoke_tmux show-option -gqv @tmux-agents-status-root)" != "$smoke_plugin" ]; do
+		[ "$(date +%s)" -lt "$deadline" ] ||
+			smoke_fail 'the smoke tmux server loaded the candidate core (waited 10s)'
+		sleep .1
+	done
 }
 
 smoke_end() {

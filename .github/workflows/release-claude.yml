@@ -86,7 +86,7 @@ jobs:
           [ -n "$tag" ] || exit 0
           git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" "$tag" .claude-plugin packages/claude
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: staged-claude
           path: ${{ runner.temp }}/staged/*.tar
@@ -118,7 +118,7 @@ jobs:
       - name: Install the agent
         run: npm install --global @anthropic-ai/claude-code
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: staged-claude
           path: ${{ runner.temp }}/staged

@@ -104,7 +104,7 @@ jobs:
           [ -n "$tag" ] || exit 0
           git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" "$tag" .agents/plugins packages/codex
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: staged-codex
           path: ${{ runner.temp }}/staged/*.tar
@@ -138,7 +138,7 @@ jobs:
       - name: Install the agent
         run: npm install --global @openai/codex
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: staged-codex
           path: ${{ runner.temp }}/staged
