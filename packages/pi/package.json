@@ -1,6 +1,6 @@
 {
   "name": "tmux-agents-status-pi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi lifecycle adapter for tmux-agents-status",
   "repository": {
     "type": "git",
