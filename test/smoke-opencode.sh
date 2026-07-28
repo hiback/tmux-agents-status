@@ -31,23 +31,39 @@ cat >"$config" <<'EOF'
 }
 EOF
 
+await_config_entry() {
+	entry=$1
+	label=$2
+	deadline=$(($(date +%s) + 10))
+	while ! grep -Fq "$entry" "$config"; do
+		[ "$(date +%s)" -lt "$deadline" ] || smoke_fail "$label (waited 10s)"
+		sleep .1
+	done
+}
+
 if [ -n "$previous" ]; then
-	opencode plugin --global "tmux-agents-status-opencode@$previous" >/dev/null
-	grep -Fq 'tmux-agents-status-opencode' "$config" ||
-		smoke_fail 'the previous public version registers natively'
-	opencode plugin --global --force "$package" >/dev/null
+	opencode plugin --global "tmux-agents-status-opencode@$previous"
+	await_config_entry 'tmux-agents-status-opencode' \
+		'the previous public version registers natively'
+	opencode plugin --global --force "$package"
 	smoke_ok 'the native update path replaces the previous public version'
 else
-	opencode plugin --global "$package" >/dev/null
+	opencode plugin --global "$package"
 fi
-grep -Fq "$package" "$config" || smoke_fail 'the staged artifact registers natively'
+await_config_entry "$package" 'the staged artifact registers natively'
 smoke_ok 'the staged artifact registers through opencode plugin --global'
 
-smoke_launch "exec opencode --model '$TAS_SMOKE_MODEL'"
+# Submit the first prompt through OpenCode's native startup option. A plugin can
+# claim its pane before the full TUI accepts synthetic key input, especially on
+# macOS; after this turn settles, later keyboard-driven scenarios have a proven
+# ready prompt.
+smoke_launch "exec opencode --model '$TAS_SMOKE_MODEL' --prompt 'Reply with the single word ready and nothing else.'"
 smoke_await_claim opencode 120 'pid:[1-9]*'
+smoke_await running 60 'an OpenCode turn reports exact running'
+smoke_await completed 300 'a settled OpenCode turn reports exact completed'
 
 smoke_type 'Run the shell command true, then reply with the single word ready.'
-smoke_await running 60 'an OpenCode turn reports exact running'
+smoke_await running 60 'a tool turn reports exact running'
 smoke_await waiting 180 'a pending permission request reports exact waiting'
 smoke_key Enter
 smoke_await running 60 'answering the request resumes exact running'

@@ -33,7 +33,11 @@ smoke_begin() {
 	(cd "$root" && git ls-files -z | tar -cf - --null -T -) | tar -xf - -C "$smoke_plugin"
 
 	HOME=$smoke_home
-	export HOME
+	XDG_CONFIG_HOME=$smoke_home/.config
+	XDG_CACHE_HOME=$smoke_home/.cache
+	XDG_DATA_HOME=$smoke_home/.local/share
+	XDG_STATE_HOME=$smoke_home/.local/state
+	export HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
 	cat >"$smoke_home/.tmux.conf" <<EOF
 set -g window-status-format '#I:#W#{E:@tmux-agents-status-window}'
 set -g window-status-current-format '#I:#W#{E:@tmux-agents-status-window}'
