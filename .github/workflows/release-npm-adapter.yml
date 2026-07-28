@@ -26,17 +26,19 @@ on:
         description: provider/model used by the smoke turns
         required: true
         type: string
+    # Neither secret is declared required, because neither is passed at call
+    # time. Both live in the adapter's own environment rather than at repository
+    # level, so `secrets: inherit` carries nothing and the job that declares the
+    # environment resolves them itself. Requiring either one fails the call
+    # before any environment exists to resolve.
     secrets:
-      # Bootstrap only, and deliberately optional: npm can only attach a trusted
-      # publisher to a package that already exists, so the very first release of
-      # each adapter has to authenticate with a token. Callers pass it through
-      # `secrets: inherit`, but it lives in the adapter's own environment, which
-      # the publish job resolves directly. Requiring it here would fail every
-      # release once the token is gone.
+      # Bootstrap only: npm can only attach a trusted publisher to a package
+      # that already exists, so each adapter's first release authenticates with
+      # a token. Its absence is the steady state.
       NPM_TOKEN:
         required: false
       SMOKE_OPENAI_API_KEY:
-        required: true
+        required: false
 
 permissions:
   contents: read
