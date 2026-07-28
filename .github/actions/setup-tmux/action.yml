@@ -28,15 +28,26 @@ runs:
         path: ${{ runner.temp }}/tmux-${{ inputs.version }}
         key: tmux-${{ inputs.version }}-${{ runner.os }}-${{ hashFiles('.github/scripts/build-tmux.sh') }}
 
+    - name: Install pinned tmux runtime dependencies
+      if: inputs.version != 'current'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libevent-dev libncurses-dev
+
     - name: Build pinned tmux
       if: inputs.version != 'current' && steps.pinned.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libevent-dev libncurses-dev pkg-config
+        sudo apt-get install -y build-essential pkg-config
         ./.github/scripts/build-tmux.sh '${{ inputs.version }}' '${{ runner.temp }}/tmux-${{ inputs.version }}'
 
     - name: Use pinned tmux
       if: inputs.version != 'current'
       shell: bash
       run: echo '${{ runner.temp }}/tmux-${{ inputs.version }}/bin' >>"$GITHUB_PATH"
+
+    - name: Verify pinned tmux
+      if: inputs.version != 'current'
+      shell: bash
+      run: tmux -V
