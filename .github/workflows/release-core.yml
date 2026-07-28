@@ -15,13 +15,17 @@ jobs:
   # Three lanes of the deterministic suite, every adapter fixture, every package
   # check, and the core release gate on Linux, macOS, and the tmux 3.0 floor.
   deterministic:
+    # Forks carry neither the protected environment nor its credentials; the
+    # guard keeps a fork's own tag from starting a publication attempt at all.
+    if: github.repository == 'hiback/tmux-agents-status'
     uses: ./.github/workflows/ci.yml
 
   publish:
     needs: deterministic
     runs-on: ubuntu-latest
-    # A protected environment keeps publication reachable only after the gates
-    # pass. Its reviewers and the tag ruleset are GitHub settings, not files.
+    # `needs` is what keeps publication unreachable until every gate passes. The
+    # environment adds the deployment restriction to this artifact's own tag
+    # pattern, which is a GitHub setting rather than a file.
     environment: core-release
     permissions:
       contents: write

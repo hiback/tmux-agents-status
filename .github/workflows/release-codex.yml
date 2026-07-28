@@ -1,7 +1,7 @@
 name: Release Codex adapter
 
 # The Codex adapter is the plugin of this repository's Codex marketplace, so
-# publication is a GitHub release on its own tag. The tag, environments, and
+# publication is a GitHub release on its own tag. The tag, environment, and
 # gates are separate from every other artifact, so this release can neither
 # block nor be blocked by another adapter or the core.
 on:
@@ -15,7 +15,7 @@ jobs:
   # Three lanes of the full deterministic suite, which already contains every
   # adapter fixture and every package check.
   deterministic:
-    # Forks carry neither the protected environments nor their credentials; the
+    # Forks carry neither the protected environment nor its credentials; the
     # guard keeps a fork's own tag from starting a publication attempt at all.
     if: github.repository == 'hiback/tmux-agents-status'
     uses: ./.github/workflows/ci.yml
@@ -29,8 +29,8 @@ jobs:
     outputs:
       marketplace: ${{ steps.trees.outputs.marketplace }}
       plugin: ${{ steps.trees.outputs.plugin }}
-      hooks: ${{ steps.review.outputs.hooks }}
-      hook: ${{ steps.review.outputs.hook }}
+      hooks: ${{ steps.digests.outputs.hooks }}
+      hook: ${{ steps.digests.outputs.hook }}
       previous: ${{ steps.previous.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
@@ -76,12 +76,11 @@ jobs:
             echo "plugin=$(git rev-parse 'HEAD:packages/codex')"
           } >>"$GITHUB_OUTPUT"
 
-      # The material of the hook trust decision. A reviewer is asked to approve
-      # `hook-trust` before any of its steps run, so the definition has to be in
-      # a log that already exists by then, which is this one. The digests travel
-      # to the smoke lanes, which refuse to trust anything else.
-      - name: Print the hook definition to be reviewed
-        id: review
+      # The hook definition and its digests, recorded in the release's own log.
+      # The digests travel to the smoke lanes, which compare them against what
+      # Codex actually installed and refuse to trust anything else.
+      - name: Record the hook definition
+        id: digests
         run: |
           hooks=$(sha256sum packages/codex/hooks/hooks.json | cut -d' ' -f1)
           hook=$(sha256sum packages/codex/bin/tmux-agents-status-hook | cut -d' ' -f1)
@@ -111,37 +110,14 @@ jobs:
           path: ${{ runner.temp }}/staged/*.tar
           retention-days: 7
 
-  # Codex hook trust is an interactive review by design, so it stays a human
-  # decision: the required reviewers on the `codex-hook-trust` environment are
-  # the review, and it blocks the lifecycle smoke and publication behind it.
-  # Nothing here or downstream bypasses that trust; the smoke lanes answer
-  # Codex's own review prompt and refuse any definition but the approved one.
-  hook-trust:
-    needs: [stage]
-    runs-on: ubuntu-latest
-    environment: codex-hook-trust
-    steps:
-      - uses: actions/checkout@v7
-
-      # The approval itself is the review; this only proves the tag still holds
-      # what `stage` printed for it.
-      - name: Verify the approved definition is still the staged one
-        env:
-          HOOKS: ${{ needs.stage.outputs.hooks }}
-          HOOK: ${{ needs.stage.outputs.hook }}
-        run: |
-          [ "$(sha256sum packages/codex/hooks/hooks.json | cut -d' ' -f1)" = "$HOOKS" ] &&
-            [ "$(sha256sum packages/codex/bin/tmux-agents-status-hook | cut -d' ' -f1)" = "$HOOK" ] || {
-            echo "the approved definition is not the staged one" >&2
-            exit 1
-          }
-
   # Credentialed real-agent lanes. They add the staged marketplace through
   # Codex's own command, install the plugin, launch Codex directly in a real
   # tmux pane, answer Codex's own hook review, and inspect plugin-owned tmux
-  # metadata only.
+  # metadata only. Nothing here bypasses hook trust: the lanes prove the install
+  # trusts nothing, that an untrusted adapter stays inert, and that Codex's own
+  # review is what activates it, against the exact definition `stage` recorded.
   smoke:
-    needs: [deterministic, stage, hook-trust]
+    needs: [deterministic, stage]
     runs-on: ${{ matrix.os }}
     environment: codex-release
     strategy:

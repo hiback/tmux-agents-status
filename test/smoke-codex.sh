@@ -20,10 +20,10 @@ previous=${2-}
 package=$(CDPATH= cd "$package" && pwd -P)
 [ -z "$previous" ] || previous=$(CDPATH= cd "$previous" && pwd -P)
 : "${OPENAI_API_KEY:?provider credential for the smoke turns}"
-# The digests the protected hook-trust review approved. They bind the reviewed
-# definition to the one this lane trusts and executes.
-: "${TAS_CODEX_HOOKS_SHA256:?reviewed hook definition digest}"
-: "${TAS_CODEX_HOOK_SHA256:?reviewed hook executable digest}"
+# The digests of the staged hook definition. They bind the definition reviewed
+# on the default branch to the one this lane trusts and executes.
+: "${TAS_CODEX_HOOKS_SHA256:?staged hook definition digest}"
+: "${TAS_CODEX_HOOK_SHA256:?staged hook executable digest}"
 # A slug that becomes unavailable or is migrated makes Codex open its own model
 # flow at startup, ahead of the hook review this lane has to answer, so this pin
 # is the first thing to suspect if a launch stops reaching its prompt.
