@@ -29,7 +29,7 @@ on:
     secrets:
       NPM_TOKEN:
         required: true
-      SMOKE_ANTHROPIC_API_KEY:
+      SMOKE_OPENAI_API_KEY:
         required: true
 
 permissions:
@@ -129,7 +129,7 @@ jobs:
         env:
           ADAPTER: ${{ inputs.adapter }}
           TAS_SMOKE_MODEL: ${{ inputs.model }}
-          ANTHROPIC_API_KEY: ${{ secrets.SMOKE_ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.SMOKE_OPENAI_API_KEY }}
           # One lane exercises the native update path; a first release has no
           # previous public version to update from.
           PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}

@@ -24,9 +24,10 @@ package=$(CDPATH= cd "$package" && pwd -P)
 # definition to the one this lane trusts and executes.
 : "${TAS_CODEX_HOOKS_SHA256:?reviewed hook definition digest}"
 : "${TAS_CODEX_HOOK_SHA256:?reviewed hook executable digest}"
-# The turns take Codex's default model. Pinning one costs less but makes the
-# launch nondeterministic: an unavailable or migrated slug adds its own modal
-# ahead of the hook review this lane has to answer.
+# A slug that becomes unavailable or is migrated makes Codex open its own model
+# flow at startup, ahead of the hook review this lane has to answer, so this pin
+# is the first thing to suspect if a launch stops reaching its prompt.
+: "${TAS_SMOKE_MODEL:?model used by the smoke turns}"
 
 plugin=tmux-agents-status@tmux-agents-status
 marketplace=tmux-agents-status
@@ -57,6 +58,8 @@ printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null
 # directory trust dialog. Project trust is not hook trust: the hook review below
 # is still required and is still the only thing that activates the adapter.
 cat >"$codex_home/config.toml" <<EOF
+model = "$TAS_SMOKE_MODEL"
+
 [projects."$work"]
 trust_level = "trusted"
 EOF

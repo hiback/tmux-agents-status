@@ -185,6 +185,7 @@ jobs:
         env:
           TAS_CODEX_HOOKS_SHA256: ${{ needs.stage.outputs.hooks }}
           TAS_CODEX_HOOK_SHA256: ${{ needs.stage.outputs.hook }}
+          TAS_SMOKE_MODEL: gpt-5.6-luna
           OPENAI_API_KEY: ${{ secrets.SMOKE_OPENAI_API_KEY }}
         run: |
           tmux -V
