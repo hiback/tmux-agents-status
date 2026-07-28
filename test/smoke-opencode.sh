@@ -71,6 +71,10 @@ smoke_await completed 300 'a settled OpenCode turn reports exact completed'
 
 smoke_type 'Count from 1 to 500, one number per line.'
 smoke_await running 60 'a second OpenCode turn reports exact running'
+# OpenCode requires a second Escape within five seconds before it invokes the
+# native session abort; the first press only arms the interruption.
+smoke_key Escape
+sleep .2
 smoke_key Escape
 smoke_await failed 120 'an aborted OpenCode turn reports exact failed'
 
