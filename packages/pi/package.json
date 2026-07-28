@@ -2,6 +2,13 @@
   "name": "tmux-agents-status-pi",
   "version": "0.1.0",
   "description": "Pi lifecycle adapter for tmux-agents-status",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiback/tmux-agents-status.git",
+    "directory": "packages/pi"
+  },
+  "homepage": "https://github.com/hiback/tmux-agents-status#readme",
+  "bugs": "https://github.com/hiback/tmux-agents-status/issues",
   "type": "module",
   "keywords": ["pi-package", "tmux", "coding-agent"],
   "files": ["tmux-agents-status.ts"],

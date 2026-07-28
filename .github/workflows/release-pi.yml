@@ -4,8 +4,11 @@ on:
   push:
     tags: ["pi-v*"]
 
+# The called workflow cannot hold a token stronger than this one, so the
+# registry's OIDC scope has to be granted here for its publish job to narrow.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   release:

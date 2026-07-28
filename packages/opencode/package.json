@@ -2,6 +2,13 @@
   "name": "tmux-agents-status-opencode",
   "version": "0.1.0",
   "description": "OpenCode lifecycle adapter for tmux-agents-status",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiback/tmux-agents-status.git",
+    "directory": "packages/opencode"
+  },
+  "homepage": "https://github.com/hiback/tmux-agents-status#readme",
+  "bugs": "https://github.com/hiback/tmux-agents-status/issues",
   "type": "module",
   "keywords": ["opencode", "opencode-plugin", "tmux", "coding-agent"],
   "files": ["tmux-agents-status.ts"],

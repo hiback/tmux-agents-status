@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       environment:
-        description: Protected environment holding this adapter's credentials
+        description: Protected environment holding this adapter's smoke credential
         required: true
         type: string
       agent:
@@ -27,8 +27,14 @@ on:
         required: true
         type: string
     secrets:
+      # Bootstrap only, and deliberately optional: npm can only attach a trusted
+      # publisher to a package that already exists, so the very first release of
+      # each adapter has to authenticate with a token. Callers pass it through
+      # `secrets: inherit`, but it lives in the adapter's own environment, which
+      # the publish job resolves directly. Requiring it here would fail every
+      # release once the token is gone.
       NPM_TOKEN:
-        required: true
+        required: false
       SMOKE_OPENAI_API_KEY:
         required: true
 
@@ -142,6 +148,13 @@ jobs:
     needs: [stage, smoke]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    # Trusted publishing: the registry credential is a short-lived OIDC token
+    # bound to this repository, its caller workflow, and this environment, so no
+    # long-lived publish token has to exist for anything to leak or reuse. Until
+    # each package exists and carries its trusted publisher, npm falls back to
+    # the bootstrap token below.
+    permissions:
+      id-token: write
     steps:
       - uses: actions/setup-node@v7
         with:
@@ -156,5 +169,7 @@ jobs:
       - name: Publish the staged artifact
         env:
           TARBALL: ${{ needs.stage.outputs.tarball }}
+          # Unset once this adapter's trusted publisher is configured; see
+          # docs/agents/release.md.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "$RUNNER_TEMP/staged/$TARBALL" --access public
