@@ -1,16 +1,16 @@
 # Tmux Agents Status
 
-Show coding-agent activity in the tmux status bar, including active turns and unread results in other panes or sessions.
+Show coding-agent activity in the tmux status bar, including active turns and unread results in other panes, windows or sessions.
 
 - `•` working
-- `?` waiting for input (when supported)
+- `?` waiting for input
 - `✓` finished
 - `!` failed or cancelled
 - Unread results stay highlighted until you visit their pane
 
 ![Tmux status bar showing agent activity](assets/tmux-agents-status.png)
 
-No background daemon is required. Agent adapters report lifecycle events to the tmux plugin only when state changes.
+You can also [customize](#customize) the displayed glyphs. No background daemon is required. Agent adapters report lifecycle events to the tmux plugin only when state changes.
 
 ## Requirements
 
