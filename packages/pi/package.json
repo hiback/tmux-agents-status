@@ -11,9 +11,9 @@
   "bugs": "https://github.com/hiback/tmux-agents-status/issues",
   "type": "module",
   "keywords": ["pi-package", "tmux", "coding-agent"],
-  "files": ["tmux-agents-status.ts"],
+  "files": ["index.ts"],
   "pi": {
-    "extensions": ["./tmux-agents-status.ts"]
+    "extensions": ["./index.ts"]
   },
   "license": "MIT"
 }

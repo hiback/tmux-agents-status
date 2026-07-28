@@ -8,7 +8,7 @@ fail() {
 	exit 1
 }
 
-adapter=$("$root/test/package-adapter.sh" packages/pi tmux-agents-status-pi)
+adapter=$("$root/test/package-adapter.sh" packages/pi tmux-agents-status-pi index.ts)
 printf '%s\n' "$adapter" | grep -F 'export default function' >/dev/null ||
 	fail 'Pi loads the adapter through its default extension export'
 

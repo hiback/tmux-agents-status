@@ -58,9 +58,7 @@ try {
 			env: process.env,
 		});
 	const extension = (
-		await import(
-			new URL("../packages/pi/tmux-agents-status.ts", import.meta.url).href
-		)
+		await import(new URL("../packages/pi/index.ts", import.meta.url).href)
 	).default;
 	const tui = {
 		mode: "tui",

@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-const moduleUrl = new URL(
-	"../packages/pi/tmux-agents-status.ts",
-	import.meta.url,
-);
+const moduleUrl = new URL("../packages/pi/index.ts", import.meta.url);
 const ownershipKey = Symbol.for("tmux-agents-status.pi-process-ownership-v2");
 
 function resetOwnership() {
