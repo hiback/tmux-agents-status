@@ -24,6 +24,9 @@ smoke_begin() {
 	smoke_socket=tmux-agents-status-smoke-$smoke_name-$$
 	smoke_tmp=${TMPDIR:-/tmp}/tmux-agents-status-smoke-$smoke_name-$$
 	mkdir "$smoke_tmp"
+	# The entrypoint publishes a pwd -P root. Canonicalize the expected path too:
+	# macOS exposes /var-based TMPDIR paths whose physical prefix is /private/var.
+	smoke_tmp=$(CDPATH= cd "$smoke_tmp" && pwd -P)
 	smoke_home=$smoke_tmp/home
 	smoke_plugin=$smoke_home/.tmux/plugins/tmux-agents-status
 	mkdir -p "$smoke_plugin"
