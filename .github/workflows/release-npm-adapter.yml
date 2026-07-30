@@ -149,6 +149,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # Publication needs the tested policy entrypoint but never a source
+      # checkout from which it could accidentally rebuild the package.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-policy-${{ inputs.adapter }}
+          path: scripts/release-policy.mjs
+          if-no-files-found: error
+          retention-days: 7
+
   # Both operating systems install the same verified tarball through the
   # current stable native agent. Linux alone receives the greatest published
   # version below the candidate for update coverage.
@@ -222,13 +231,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     permissions:
-      contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.sha }}
-
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
@@ -238,6 +242,11 @@ jobs:
         with:
           name: staged-${{ inputs.adapter }}
           path: ${{ runner.temp }}/staged
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-policy-${{ inputs.adapter }}
+          path: ${{ runner.temp }}/release-policy
 
       - name: Verify the publication tarball
         env:
@@ -269,7 +278,7 @@ jobs:
           if [ -n "${NPM_TOKEN-}" ]; then
             export NODE_AUTH_TOKEN=$NPM_TOKEN
           fi
-          result=$(node scripts/release-policy.mjs check-npm-artifact \
+          result=$(node "$RUNNER_TEMP/release-policy/release-policy.mjs" check-npm-artifact \
             --package "$PACKAGE" \
             --version "$CANDIDATE" \
             --integrity "$INTEGRITY")
