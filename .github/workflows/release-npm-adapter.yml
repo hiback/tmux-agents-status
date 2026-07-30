@@ -1,11 +1,15 @@
 name: Release npm adapter
 
-# One release path shared by both npm adapters. Each caller is triggered by its
-# own tag and runs in its own protected environment, so one adapter's gates,
-# failures, or release state can neither block nor publish the other.
+# Pi and OpenCode enter this path only after their caller has reused successful
+# main CI evidence for the exact tagged commit. Each caller supplies fixed
+# artifact metadata and an independent protected environment.
 on:
   workflow_call:
     inputs:
+      sha:
+        description: Tagged commit already authorized by exact-SHA main CI proof
+        required: true
+        type: string
       adapter:
         description: Workspace directory under packages/
         required: true
@@ -15,26 +19,21 @@ on:
         required: true
         type: string
       environment:
-        description: Protected environment holding this adapter's smoke credential
+        description: Protected environment holding this adapter's credentials
         required: true
         type: string
       agent:
-        description: npm package providing the agent CLI for real-agent smoke
+        description: npm package providing the current stable agent CLI
         required: true
         type: string
       model:
         description: provider/model used by the smoke turns
         required: true
         type: string
-    # Neither secret is declared required, because neither is passed at call
-    # time. Both live in the adapter's own environment rather than at repository
-    # level, so `secrets: inherit` carries nothing and the job that declares the
-    # environment resolves them itself. Requiring either one fails the call
-    # before any environment exists to resolve.
+    # These secrets live in the selected environment. NPM_TOKEN is deliberately
+    # optional: OIDC trusted publishing is steady state, while an explicitly
+    # provisioned token remains an emergency fallback.
     secrets:
-      # Bootstrap only: npm can only attach a trusted publisher to a package
-      # that already exists, so each adapter's first release authenticates with
-      # a token. Its absence is the steady state.
       NPM_TOKEN:
         required: false
       SMOKE_OPENAI_API_KEY:
@@ -44,64 +43,117 @@ permissions:
   contents: read
 
 jobs:
-  # Three lanes of the full deterministic suite, which already contains every
-  # adapter fixture and every package check.
-  deterministic:
-    uses: ./.github/workflows/ci.yml
-
-  # Builds the published artifact exactly once. Every later job consumes this
-  # upload, so nothing that is smoke tested is rebuilt before publication.
+  # Pack exactly once and record npm's registry-compatible integrity for those
+  # bytes. Every smoke and publication decision consumes this upload.
   stage:
     runs-on: ubuntu-latest
     outputs:
       tarball: ${{ steps.pack.outputs.tarball }}
-      previous: ${{ steps.previous.outputs.version }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+      candidate: ${{ steps.policy.outputs.candidate }}
+      previous: ${{ steps.policy.outputs.previous }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.sha }}
 
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
-      - name: Verify the tag matches the adapter manifest
+      - name: Verify the tagged commit is on the default branch
         env:
-          ADAPTER: ${{ inputs.adapter }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TAGGED_SHA: ${{ inputs.sha }}
         run: |
-          version=$(node -p "require('./packages/$ADAPTER/package.json').version")
-          [ "$GITHUB_REF_NAME" = "$ADAPTER-v$version" ] || {
-            echo "tag $GITHUB_REF_NAME does not match manifest version $version" >&2
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$TAGGED_SHA" "origin/$DEFAULT_BRANCH" || {
+            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
             exit 1
           }
 
-      - name: Build the artifact
+      - name: Verify the candidate against tag and registry history
+        id: policy
+        env:
+          ADAPTER: ${{ inputs.adapter }}
+          PACKAGE: ${{ inputs.package }}
+          TAGGED_SHA: ${{ inputs.sha }}
+        run: |
+          registry_versions=$RUNNER_TEMP/registry-versions.json
+          registry_errors=$RUNNER_TEMP/registry-errors.log
+          if npm view "$PACKAGE" versions --json >"$registry_versions" 2>"$registry_errors"; then
+            :
+          elif grep -Eiq '(^|[^[:alnum:]_])E404([^[:alnum:]_]|$)' \
+            "$registry_versions" "$registry_errors"; then
+            printf '[]\n' >"$registry_versions"
+          else
+            cat "$registry_versions" >&2
+            cat "$registry_errors" >&2
+            exit 1
+          fi
+
+          result=$(node scripts/release-policy.mjs check-artifact \
+            --artifact "$ADAPTER" \
+            --tag "$GITHUB_REF_NAME" \
+            --head "$TAGGED_SHA" \
+            --registry-versions "$registry_versions")
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" >>"$GITHUB_OUTPUT"
+
+      - name: Pack the candidate once
         id: pack
         env:
           ADAPTER: ${{ inputs.adapter }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/staged"
-          npm pack --silent --workspace "packages/$ADAPTER" --pack-destination "$RUNNER_TEMP/staged"
-          set -- "$RUNNER_TEMP/staged"/*.tgz
-          [ "$#" -eq 1 ] || { echo 'npm pack produced more than one artifact' >&2; exit 1; }
-          echo "tarball=$(basename "$1")" >>"$GITHUB_OUTPUT"
-
-      # An empty result means a first release, which skips only the update case.
-      - name: Resolve the previous public version
-        id: previous
-        env:
           PACKAGE: ${{ inputs.package }}
-        run: echo "version=$(npm view "$PACKAGE" version 2>/dev/null || :)" >>"$GITHUB_OUTPUT"
+          CANDIDATE: ${{ steps.policy.outputs.candidate }}
+        run: |
+          staged=$RUNNER_TEMP/staged
+          mkdir -p "$staged"
+          npm pack --json --workspace "packages/$ADAPTER" \
+            --pack-destination "$staged" >"$RUNNER_TEMP/npm-pack.json"
+
+          STAGED=$staged PACK_JSON=$RUNNER_TEMP/npm-pack.json \
+            node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+          import { basename } from "node:path";
+
+          const entries = JSON.parse(readFileSync(process.env.PACK_JSON, "utf8"));
+          const tarballs = readdirSync(process.env.STAGED).filter((name) => name.endsWith(".tgz"));
+          if (!Array.isArray(entries) || entries.length !== 1 || tarballs.length !== 1) {
+            throw new Error("npm pack must produce exactly one candidate tarball");
+          }
+          const [entry] = entries;
+          const [tarball] = tarballs;
+          if (basename(entry.filename) !== tarball) {
+            throw new Error("npm pack metadata does not identify the staged tarball");
+          }
+          if (entry.name !== process.env.PACKAGE || entry.version !== process.env.CANDIDATE) {
+            throw new Error("npm pack metadata does not match the verified candidate");
+          }
+          if (typeof entry.integrity !== "string" ||
+              !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(entry.integrity)) {
+            throw new Error("npm pack did not report registry-compatible sha512 integrity");
+          }
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `tarball=${tarball}\nintegrity=${entry.integrity}\n`,
+          );
+          console.log(`Staged ${entry.name}@${entry.version} as ${tarball} (${entry.integrity})`);
+          NODE
 
       - uses: actions/upload-artifact@v7
         with:
           name: staged-${{ inputs.adapter }}
-          path: ${{ runner.temp }}/staged/*.tgz
+          path: ${{ runner.temp }}/staged/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
           retention-days: 7
 
-  # Credentialed real-agent lanes. They install the staged artifact through the
-  # agent's own mechanism, launch the agent directly in a real tmux pane, and
-  # inspect plugin-owned tmux metadata only.
+  # Both operating systems install the same verified tarball through the
+  # current stable native agent. Linux alone receives the greatest published
+  # version below the candidate for update coverage.
   smoke:
-    needs: [deterministic, stage]
+    needs: stage
     runs-on: ${{ matrix.os }}
     environment: ${{ inputs.environment }}
     strategy:
@@ -110,6 +162,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -119,7 +173,7 @@ jobs:
         with:
           version: current
 
-      - name: Install the agent
+      - name: Install the current stable agent
         env:
           AGENT: ${{ inputs.agent }}
         run: npm install --global "$AGENT"
@@ -129,18 +183,29 @@ jobs:
           name: staged-${{ inputs.adapter }}
           path: ${{ runner.temp }}/staged
 
-      - name: Unpack the staged artifact
+      - name: Verify and unpack the staged tarball
         env:
-          TARBALL: ${{ needs.stage.outputs.tarball }}
-        run: tar -xzf "$RUNNER_TEMP/staged/$TARBALL" -C "$RUNNER_TEMP/staged"
+          TARBALL_PATH: ${{ runner.temp }}/staged/${{ needs.stage.outputs.tarball }}
+          EXPECTED_INTEGRITY: ${{ needs.stage.outputs.integrity }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+
+          const actual = `sha512-${createHash("sha512")
+            .update(readFileSync(process.env.TARBALL_PATH))
+            .digest("base64")}`;
+          if (actual !== process.env.EXPECTED_INTEGRITY) {
+            throw new Error("downloaded tarball integrity differs from staging");
+          }
+          NODE
+          tar -xzf "$TARBALL_PATH" -C "$RUNNER_TEMP/staged"
 
       - name: Smoke the staged artifact through the real agent
         env:
           ADAPTER: ${{ inputs.adapter }}
           TAS_SMOKE_MODEL: ${{ inputs.model }}
           OPENAI_API_KEY: ${{ secrets.SMOKE_OPENAI_API_KEY }}
-          # One lane exercises the native update path; a first release has no
-          # previous public version to update from.
           PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
         run: |
           [ -n "$OPENAI_API_KEY" ] || {
@@ -150,19 +215,20 @@ jobs:
           tmux -V
           "./test/smoke-$ADAPTER.sh" "$RUNNER_TEMP/staged/package" "$PREVIOUS"
 
-  # Publishes the same artifact the lanes installed, without rebuilding it.
+  # Query the exact registry version before publishing the same tarball. A
+  # rerun is successful only when registry and staged integrity are identical.
   publish:
     needs: [stage, smoke]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    # Trusted publishing: the registry credential is a short-lived OIDC token
-    # bound to this repository, its caller workflow, and this environment, so no
-    # long-lived publish token has to exist for anything to leak or reuse. Until
-    # each package exists and carries its trusted publisher, npm falls back to
-    # the bootstrap token below.
     permissions:
+      contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
@@ -173,10 +239,51 @@ jobs:
           name: staged-${{ inputs.adapter }}
           path: ${{ runner.temp }}/staged
 
-      - name: Publish the staged artifact
+      - name: Verify the publication tarball
         env:
-          TARBALL: ${{ needs.stage.outputs.tarball }}
-          # Unset once this adapter's trusted publisher is configured; see
-          # docs/agents/release.md.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "$RUNNER_TEMP/staged/$TARBALL" --access public
+          TARBALL_PATH: ${{ runner.temp }}/staged/${{ needs.stage.outputs.tarball }}
+          EXPECTED_INTEGRITY: ${{ needs.stage.outputs.integrity }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+
+          const actual = `sha512-${createHash("sha512")
+            .update(readFileSync(process.env.TARBALL_PATH))
+            .digest("base64")}`;
+          if (actual !== process.env.EXPECTED_INTEGRITY) {
+            throw new Error("publication tarball integrity differs from staging");
+          }
+          NODE
+
+      - name: Publish the absent candidate or accept an identical rerun
+        env:
+          PACKAGE: ${{ inputs.package }}
+          CANDIDATE: ${{ needs.stage.outputs.candidate }}
+          INTEGRITY: ${{ needs.stage.outputs.integrity }}
+          TARBALL_PATH: ${{ runner.temp }}/staged/${{ needs.stage.outputs.tarball }}
+          # Empty in steady state so npm uses the job's OIDC identity. A
+          # deliberately provisioned environment token is the emergency path.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN-}" ]; then
+            export NODE_AUTH_TOKEN=$NPM_TOKEN
+          fi
+          result=$(node scripts/release-policy.mjs check-npm-artifact \
+            --package "$PACKAGE" \
+            --version "$CANDIDATE" \
+            --integrity "$INTEGRITY")
+          printf '%s\n' "$result"
+          decision=$(printf '%s\n' "$result" | sed -n 's/^decision=//p')
+          case "$decision" in
+            publish)
+              npm publish "$TARBALL_PATH" --access public
+              ;;
+            already-published)
+              echo "$PACKAGE@$CANDIDATE already has the staged integrity; publication is complete"
+              ;;
+            *)
+              echo "unexpected npm publication decision: $decision" >&2
+              exit 1
+              ;;
+          esac

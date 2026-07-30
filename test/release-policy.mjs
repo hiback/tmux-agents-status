@@ -479,6 +479,15 @@ for (const artifact of ["pi", "opencode", "claude", "codex"]) {
 
 {
   const repository = createRepository();
+  git(repository, "tag", "-a", "core-v0.1.0", "-m", "annotated core tag");
+  const rejected = checkArtifact(repository, "core", "core-v0.1.0", {
+    expectFailure: true,
+  });
+  assert.match(`${rejected.stdout}${rejected.stderr}`, /lightweight/i);
+}
+
+{
+  const repository = createRepository();
   const base = git(repository, "rev-parse", "HEAD");
   git(repository, "tag", "pi-v1.1.0");
   append(repository, artifacts.pi.shipped);

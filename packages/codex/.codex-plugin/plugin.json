@@ -1,6 +1,6 @@
 {
   "name": "tmux-agents-status",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Report Codex lifecycle state to the tmux-agents-status tmux core",
   "keywords": ["codex", "tmux", "coding-agent", "lifecycle"],
   "license": "MIT",

@@ -1,22 +1,31 @@
-name: Release Pi adapter
+name: Release Pi npm adapter
 
 on:
   push:
     tags: ["pi-v*"]
 
-# The called workflow cannot hold a token stronger than this one, so the
-# registry's OIDC scope has to be granted here for its publish job to narrow.
+# The proof reads Actions evidence; the called publication workflow narrows the
+# OIDC grant to its npm publish job.
 permissions:
+  actions: read
   contents: read
   id-token: write
 
 jobs:
-  release:
-    # Forks carry neither the protected environment nor its credentials; the
-    # guard keeps a fork's own tag from starting a publication attempt at all.
+  main-ci-proof:
     if: github.repository == 'hiback/tmux-agents-status'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/ci-proof.yml
+    with:
+      sha: ${{ github.sha }}
+
+  release:
+    needs: main-ci-proof
     uses: ./.github/workflows/release-npm-adapter.yml
     with:
+      sha: ${{ github.sha }}
       adapter: pi
       package: tmux-agents-status-pi
       environment: pi-release

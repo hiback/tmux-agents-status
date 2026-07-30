@@ -423,6 +423,10 @@ function checkArtifact(options) {
   }
 
   const tagVersion = parseVersion(tag.slice(details.tagPrefix.length), `${artifact} tag ${tag}`);
+  const tagType = git(repository, "cat-file", "-t", `refs/tags/${tag}`).trim();
+  if (tagType !== "commit") {
+    throw new PolicyError(`${artifact} tag ${tag} must be a lightweight commit tag`);
+  }
   const candidate = details.manifest
     ? readManifestVersion(repository, head, artifact)
     : tagVersion;

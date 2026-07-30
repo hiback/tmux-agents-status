@@ -1,111 +1,111 @@
-name: Release Claude Code adapter
+name: Verify Claude Code adapter
 
-# The Claude Code adapter is distributed as the plugin of this repository's
-# marketplace, so publication is a GitHub release on its own tag. The tag,
-# environment, and gates are separate from every other artifact, so this
-# release can neither block nor be blocked by another adapter or the core.
+# Claude Code users consume this repository's rolling marketplace on main. A
+# component tag is therefore a verification checkpoint, not a publication.
 on:
   push:
     tags: ["claude-v*"]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  # Three lanes of the full deterministic suite, which already contains every
-  # adapter fixture and every package check.
-  deterministic:
-    # Forks carry neither the protected environment nor its credentials; the
-    # guard keeps a fork's own tag from starting a publication attempt at all.
-    if: github.repository == 'hiback/tmux-agents-status'
-    uses: ./.github/workflows/ci.yml
-
-  # Builds the marketplace tree exactly once. Both smoke lanes install this
-  # upload, and publication verifies the tag still resolves to it, so nothing
-  # that was tested can be rebuilt before it reaches users.
-  stage:
+  verify-tag:
     if: github.repository == 'hiback/tmux-agents-status'
     runs-on: ubuntu-latest
     outputs:
-      marketplace: ${{ steps.trees.outputs.marketplace }}
-      plugin: ${{ steps.trees.outputs.plugin }}
-      previous: ${{ steps.previous.outputs.tag }}
+      previous: ${{ steps.policy.outputs.previous }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
-      - name: Verify the tag matches the plugin manifest
+      - name: Verify the tag, manifest, and component history
+        id: policy
         run: |
-          version=$(node -p "require('./packages/claude/.claude-plugin/plugin.json').version")
-          [ "$GITHUB_REF_NAME" = "claude-v$version" ] || {
-            echo "tag $GITHUB_REF_NAME does not match manifest version $version" >&2
-            exit 1
-          }
+          result=$(node scripts/release-policy.mjs check-artifact \
+            --artifact claude \
+            --tag "$GITHUB_REF_NAME" \
+            --head "$GITHUB_SHA")
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" >>"$GITHUB_OUTPUT"
 
-      # A marketplace added as `hiback/tmux-agents-status` resolves the default
-      # branch, so a tag off it would release contents no user can install.
-      - name: Verify the tag is on the default branch
+      - name: Verify the tagged commit is on the default branch
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" || {
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" || {
             echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
             exit 1
           }
 
-      # `git archive` preserves the hook's executable bit, which a plain
-      # directory upload would drop.
-      - name: Build the marketplace artifact
+  main-ci-proof:
+    needs: verify-tag
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/ci-proof.yml
+    with:
+      sha: ${{ github.sha }}
+
+  # Archive once so both native-agent lanes install identical marketplace bytes.
+  stage:
+    needs: [verify-tag, main-ci-proof]
+    runs-on: ubuntu-latest
+    outputs:
+      previous: ${{ steps.previous.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      # git archive preserves the hook executable bit.
+      - name: Stage the candidate marketplace
         run: |
           mkdir -p "$RUNNER_TEMP/staged"
-          git archive --format=tar -o "$RUNNER_TEMP/staged/marketplace.tar" HEAD .claude-plugin packages/claude
+          git archive --format=tar -o "$RUNNER_TEMP/staged/marketplace.tar" \
+            "$GITHUB_SHA" .claude-plugin packages/claude
 
-      - name: Record the staged content ids
-        id: trees
-        run: |
-          {
-            echo "marketplace=$(git rev-parse 'HEAD:.claude-plugin')"
-            echo "plugin=$(git rev-parse 'HEAD:packages/claude')"
-          } >>"$GITHUB_OUTPUT"
-
-      # The immediate predecessor rather than the highest tag, so a patch
-      # released onto an older line still updates from what its users have. An
-      # empty result means a first release, which skips only the update case.
-      - name: Stage the previous public version
+      - name: Stage the greatest prior component version
         id: previous
+        env:
+          PREVIOUS_VERSION: ${{ needs.verify-tag.outputs.previous }}
         run: |
-          tag=$(git tag --list 'claude-v*' --sort=v:refname |
-            awk -v cur="$GITHUB_REF_NAME" '$0 == cur { print prev; found = 1; exit } { prev = $0 } END { exit !found }')
+          tag=
+          if [ -n "$PREVIOUS_VERSION" ]; then
+            tag=claude-v$PREVIOUS_VERSION
+            git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" \
+              "$tag" .claude-plugin packages/claude
+          fi
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
-          [ -n "$tag" ] || exit 0
-          git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" "$tag" .claude-plugin packages/claude
 
       - uses: actions/upload-artifact@v7
         with:
           name: staged-claude
           path: ${{ runner.temp }}/staged/*.tar
+          if-no-files-found: error
           retention-days: 7
 
-  # Credentialed real-agent lanes. They add the staged marketplace through
-  # Claude Code's own command, install the plugin at user scope, launch Claude
-  # Code directly in a real tmux pane, and inspect plugin-owned tmux metadata
-  # only.
   smoke:
-    needs: [deterministic, stage]
+    needs: stage
     runs-on: ${{ matrix.os }}
-    environment: claude-release
+    environment: claude-verification
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -115,7 +115,7 @@ jobs:
         with:
           version: current
 
-      - name: Install the agent
+      - name: Install the current stable agent
         run: npm install --global @anthropic-ai/claude-code
 
       - uses: actions/download-artifact@v8
@@ -123,19 +123,17 @@ jobs:
           name: staged-claude
           path: ${{ runner.temp }}/staged
 
-      - name: Unpack the staged artifact
+      - name: Unpack the staged marketplace
         env:
-          # One lane exercises the native update path; a first release has no
-          # previous public version to update from.
           PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/staged/marketplace"
           tar -xf "$RUNNER_TEMP/staged/marketplace.tar" -C "$RUNNER_TEMP/staged/marketplace"
-          [ -z "$PREVIOUS" ] || {
+          if [ -n "$PREVIOUS" ]; then
             mkdir -p "$RUNNER_TEMP/staged/previous"
             tar -xf "$RUNNER_TEMP/staged/previous.tar" -C "$RUNNER_TEMP/staged/previous"
             echo "PREVIOUS_DIR=$RUNNER_TEMP/staged/previous" >>"$GITHUB_ENV"
-          }
+          fi
 
       - name: Smoke the staged artifact through the real agent
         env:
@@ -144,30 +142,3 @@ jobs:
         run: |
           tmux -V
           ./test/smoke-claude.sh "$RUNNER_TEMP/staged/marketplace" "${PREVIOUS_DIR-}"
-
-  # Publishes the tag the lanes tested, after proving it still resolves to the
-  # staged marketplace contents.
-  publish:
-    needs: [stage, smoke]
-    runs-on: ubuntu-latest
-    environment: claude-release
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify the tag still resolves to the staged contents
-        env:
-          MARKETPLACE: ${{ needs.stage.outputs.marketplace }}
-          PLUGIN: ${{ needs.stage.outputs.plugin }}
-        run: |
-          [ "$(git rev-parse 'HEAD:.claude-plugin')" = "$MARKETPLACE" ] &&
-            [ "$(git rev-parse 'HEAD:packages/claude')" = "$PLUGIN" ] || {
-            echo "$GITHUB_REF_NAME no longer resolves to the smoke tested contents" >&2
-            exit 1
-          }
-
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag

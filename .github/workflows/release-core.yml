@@ -1,38 +1,47 @@
-name: Release core
+name: Verify core checkpoint
 
-# The core is distributed as this repository's checkout, so publication is a
-# GitHub release on a tag. It runs no credentialed real-agent smoke: the
-# normalized executable seam makes deterministic verification sufficient for
-# core changes.
+# Core is distributed from main. Its tag workflow records a stable checkpoint
+# only after the exact commit has passed the default branch's deterministic CI.
 on:
   push:
-    tags: ["v*"]
+    tags: ["core-v*"]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  # Three lanes of the deterministic suite, every adapter fixture, every package
-  # check, and the core release gate on Linux, macOS, and the tmux 3.0 floor.
-  deterministic:
-    # Forks carry neither the protected environment nor its credentials; the
-    # guard keeps a fork's own tag from starting a publication attempt at all.
+  verify-tag:
     if: github.repository == 'hiback/tmux-agents-status'
-    uses: ./.github/workflows/ci.yml
-
-  publish:
-    needs: deterministic
     runs-on: ubuntu-latest
-    # `needs` is what keeps publication unreachable until every gate passes. The
-    # environment adds the deployment restriction to this artifact's own tag
-    # pattern, which is a GitHub setting rather than a file.
-    environment: core-release
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
 
-      - name: Publish the release
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Verify the Core checkpoint tag
+        run: node scripts/release-policy.mjs check-artifact --artifact core --tag "$GITHUB_REF_NAME" --head "$GITHUB_SHA"
+
+      - name: Verify the tagged commit is on the default branch
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" || {
+            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
+            exit 1
+          }
+
+  main-ci-proof:
+    needs: verify-tag
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/ci-proof.yml
+    with:
+      sha: ${{ github.sha }}

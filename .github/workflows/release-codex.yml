@@ -1,34 +1,65 @@
-name: Release Codex adapter
+name: Verify Codex adapter
 
-# The Codex adapter is the plugin of this repository's Codex marketplace, so
-# publication is a GitHub release on its own tag. The tag, environment, and
-# gates are separate from every other artifact, so this release can neither
-# block nor be blocked by another adapter or the core.
+# Codex users consume this repository's rolling marketplace on main. A
+# component tag is therefore a verification checkpoint, not a publication.
 on:
   push:
     tags: ["codex-v*"]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  # Three lanes of the full deterministic suite, which already contains every
-  # adapter fixture and every package check.
-  deterministic:
-    # Forks carry neither the protected environment nor its credentials; the
-    # guard keeps a fork's own tag from starting a publication attempt at all.
-    if: github.repository == 'hiback/tmux-agents-status'
-    uses: ./.github/workflows/ci.yml
-
-  # Builds the marketplace tree exactly once. Both smoke lanes install this
-  # upload, and publication verifies the tag still resolves to it, so nothing
-  # that was tested can be rebuilt before it reaches users.
-  stage:
+  verify-tag:
     if: github.repository == 'hiback/tmux-agents-status'
     runs-on: ubuntu-latest
     outputs:
-      marketplace: ${{ steps.trees.outputs.marketplace }}
-      plugin: ${{ steps.trees.outputs.plugin }}
+      previous: ${{ steps.policy.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Verify the tag, manifest, and component history
+        id: policy
+        run: |
+          result=$(node scripts/release-policy.mjs check-artifact \
+            --artifact codex \
+            --tag "$GITHUB_REF_NAME" \
+            --head "$GITHUB_SHA")
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" >>"$GITHUB_OUTPUT"
+
+      - name: Verify the tagged commit is on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" || {
+            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
+            exit 1
+          }
+
+  main-ci-proof:
+    needs: verify-tag
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/ci-proof.yml
+    with:
+      sha: ${{ github.sha }}
+
+  # Archive once so both native-agent lanes install identical marketplace bytes.
+  stage:
+    needs: [verify-tag, main-ci-proof]
+    runs-on: ubuntu-latest
+    outputs:
       hooks: ${{ steps.digests.outputs.hooks }}
       hook: ${{ steps.digests.outputs.hook }}
       previous: ${{ steps.previous.outputs.tag }}
@@ -36,50 +67,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - name: Verify the tag matches the plugin manifest
-        run: |
-          version=$(node -p "require('./packages/codex/.codex-plugin/plugin.json').version")
-          [ "$GITHUB_REF_NAME" = "codex-v$version" ] || {
-            echo "tag $GITHUB_REF_NAME does not match manifest version $version" >&2
-            exit 1
-          }
-
-      # A marketplace added as `hiback/tmux-agents-status` resolves the default
-      # branch, so a tag off it would release contents no user can install.
-      - name: Verify the tag is on the default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" || {
-            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
-            exit 1
-          }
-
-      # `git archive` preserves the hook's executable bit, which a plain
-      # directory upload would drop.
-      - name: Build the marketplace artifact
+      # git archive preserves the hook executable bit.
+      - name: Stage the candidate marketplace
         run: |
           mkdir -p "$RUNNER_TEMP/staged"
-          git archive --format=tar -o "$RUNNER_TEMP/staged/marketplace.tar" HEAD .agents/plugins packages/codex
+          git archive --format=tar -o "$RUNNER_TEMP/staged/marketplace.tar" \
+            "$GITHUB_SHA" .agents/plugins packages/codex
 
-      - name: Record the staged content ids
-        id: trees
-        run: |
-          {
-            echo "marketplace=$(git rev-parse 'HEAD:.agents/plugins')"
-            echo "plugin=$(git rev-parse 'HEAD:packages/codex')"
-          } >>"$GITHUB_OUTPUT"
-
-      # The hook definition and its digests, recorded in the release's own log.
-      # The digests travel to the smoke lanes, which compare them against what
-      # Codex actually installed and refuse to trust anything else.
-      - name: Record the hook definition
+      # These digests bind the tracked definition and executable to what both
+      # smoke lanes find in Codex's installed cache before they trust anything.
+      - name: Record the staged hook definition and executable
         id: digests
         run: |
           hooks=$(sha256sum packages/codex/hooks/hooks.json | cut -d' ' -f1)
@@ -92,40 +91,40 @@ jobs:
             echo "hook=$hook"
           } >>"$GITHUB_OUTPUT"
 
-      # The immediate predecessor rather than the highest tag, so a patch
-      # released onto an older line still updates from what its users have. An
-      # empty result means a first release, which skips only the update case.
-      - name: Stage the previous public version
+      - name: Stage the greatest prior component version
         id: previous
+        env:
+          PREVIOUS_VERSION: ${{ needs.verify-tag.outputs.previous }}
         run: |
-          tag=$(git tag --list 'codex-v*' --sort=v:refname |
-            awk -v cur="$GITHUB_REF_NAME" '$0 == cur { print prev; found = 1; exit } { prev = $0 } END { exit !found }')
+          tag=
+          if [ -n "$PREVIOUS_VERSION" ]; then
+            tag=codex-v$PREVIOUS_VERSION
+            git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" \
+              "$tag" .agents/plugins packages/codex
+          fi
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
-          [ -n "$tag" ] || exit 0
-          git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" "$tag" .agents/plugins packages/codex
 
       - uses: actions/upload-artifact@v7
         with:
           name: staged-codex
           path: ${{ runner.temp }}/staged/*.tar
+          if-no-files-found: error
           retention-days: 7
 
-  # Credentialed real-agent lanes. They add the staged marketplace through
-  # Codex's own command, install the plugin, launch Codex directly in a real
-  # tmux pane, answer Codex's own hook review, and inspect plugin-owned tmux
-  # metadata only. Nothing here bypasses hook trust: the lanes prove the install
-  # trusts nothing, that an untrusted adapter stays inert, and that Codex's own
-  # review is what activates it, against the exact definition `stage` recorded.
+  # Installing the plugin must trust nothing. Each lane then proves Codex's own
+  # review activates exactly the staged hook bytes and that uninstall disables it.
   smoke:
-    needs: [deterministic, stage]
+    needs: stage
     runs-on: ${{ matrix.os }}
-    environment: codex-release
+    environment: codex-verification
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -135,7 +134,7 @@ jobs:
         with:
           version: current
 
-      - name: Install the agent
+      - name: Install the current stable agent
         run: npm install --global @openai/codex
 
       - uses: actions/download-artifact@v8
@@ -143,19 +142,17 @@ jobs:
           name: staged-codex
           path: ${{ runner.temp }}/staged
 
-      - name: Unpack the staged artifact
+      - name: Unpack the staged marketplace
         env:
-          # One lane exercises the native update path; a first release has no
-          # previous public version to update from.
           PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/staged/marketplace"
           tar -xf "$RUNNER_TEMP/staged/marketplace.tar" -C "$RUNNER_TEMP/staged/marketplace"
-          [ -z "$PREVIOUS" ] || {
+          if [ -n "$PREVIOUS" ]; then
             mkdir -p "$RUNNER_TEMP/staged/previous"
             tar -xf "$RUNNER_TEMP/staged/previous.tar" -C "$RUNNER_TEMP/staged/previous"
             echo "PREVIOUS_DIR=$RUNNER_TEMP/staged/previous" >>"$GITHUB_ENV"
-          }
+          fi
 
       - name: Smoke the staged artifact through the real agent
         env:
@@ -166,30 +163,3 @@ jobs:
         run: |
           tmux -V
           ./test/smoke-codex.sh "$RUNNER_TEMP/staged/marketplace" "${PREVIOUS_DIR-}"
-
-  # Publishes the tag the lanes tested, after proving it still resolves to the
-  # staged marketplace contents.
-  publish:
-    needs: [stage, smoke]
-    runs-on: ubuntu-latest
-    environment: codex-release
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Verify the tag still resolves to the staged contents
-        env:
-          MARKETPLACE: ${{ needs.stage.outputs.marketplace }}
-          PLUGIN: ${{ needs.stage.outputs.plugin }}
-        run: |
-          [ "$(git rev-parse 'HEAD:.agents/plugins')" = "$MARKETPLACE" ] &&
-            [ "$(git rev-parse 'HEAD:packages/codex')" = "$PLUGIN" ] || {
-            echo "$GITHUB_REF_NAME no longer resolves to the smoke tested contents" >&2
-            exit 1
-          }
-
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
