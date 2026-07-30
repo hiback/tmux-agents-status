@@ -30,14 +30,8 @@ on:
         description: provider/model used by the smoke turns
         required: true
         type: string
-    # These secrets live in the selected environment. NPM_TOKEN is deliberately
-    # optional: OIDC trusted publishing is steady state, while an explicitly
-    # provisioned token remains an emergency fallback.
-    secrets:
-      NPM_TOKEN:
-        required: false
-      SMOKE_OPENAI_API_KEY:
-        required: false
+    # Credential inputs are deliberately absent. Jobs resolve the provider key
+    # and any temporary NPM_TOKEN only from the selected artifact environment.
 
 permissions:
   contents: read

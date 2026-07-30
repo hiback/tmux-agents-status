@@ -5,7 +5,8 @@ on:
     tags: ["pi-v*"]
 
 # The proof reads Actions evidence; the called publication workflow narrows the
-# OIDC grant to its npm publish job.
+# OIDC grant to its npm publish job. Provider and fallback credentials resolve
+# only from the selected artifact environment, so this caller inherits none.
 permissions:
   actions: read
   contents: read
@@ -31,4 +32,3 @@ jobs:
       environment: pi-release
       agent: "@earendil-works/pi-coding-agent"
       model: openai/gpt-5.6-luna
-    secrets: inherit
