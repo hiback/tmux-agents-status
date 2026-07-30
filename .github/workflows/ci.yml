@@ -9,11 +9,32 @@ on:
 permissions:
   contents: read
 
+# Pull requests share a group so obsolete revisions are canceled. Every other
+# run gets a unique group, so a later main push can never replace evidence for
+# an earlier commit while it is queued or running.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  artifact-policy:
+    name: artifact-version-policy
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Verify adapter artifact versions
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/release-policy.mjs check-changes --base "$BASE_SHA" --head "$GITHUB_SHA"
+
   deterministic:
     name: ${{ matrix.lane }}
     runs-on: ${{ matrix.os }}

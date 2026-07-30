@@ -1,0 +1,51 @@
+name: Reuse main CI proof
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: Tagged commit whose main CI result must be reused
+        required: true
+        type: string
+    outputs:
+      run_id:
+        description: Accepted deterministic CI workflow run identity
+        value: ${{ jobs.proof.outputs.run_id }}
+      run_url:
+        description: URL of the accepted deterministic CI workflow run
+        value: ${{ jobs.proof.outputs.run_url }}
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: main-ci-proof-${{ github.repository_id }}-${{ inputs.sha }}
+      cancel-in-progress: false
+    outputs:
+      run_id: ${{ steps.proof.outputs.run_id }}
+      run_url: ${{ steps.proof.outputs.run_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Reuse the exact commit's successful main CI run
+        id: proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAGGED_SHA: ${{ inputs.sha }}
+        run: |
+          result=$(node scripts/release-policy.mjs prove-main-ci \
+            --repository "$GITHUB_REPOSITORY" \
+            --sha "$TAGGED_SHA" \
+            --workflow ci.yml)
+          printf '%s\n' "$result" | tee -a "$GITHUB_OUTPUT"
