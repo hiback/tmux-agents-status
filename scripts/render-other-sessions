@@ -116,7 +116,6 @@ if [ -n "$groups" ]; then
 	body=${body}${body:+ }$groups
 fi
 if [ -n "$body" ]; then
-	printf '#[default]%s \n' "$body"
-else
-	printf '\n'
+	tas_present_fragment "$body "
 fi
+printf '\n'

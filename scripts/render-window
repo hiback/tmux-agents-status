@@ -53,5 +53,5 @@ case $? in
 2) empty 'required query failed' ;;
 *) empty 'render failed' ;;
 esac
-[ -z "$output" ] || printf '#[default] %s' "$output"
+[ -z "$output" ] || tas_present_fragment " $output"
 printf '\n'

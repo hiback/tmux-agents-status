@@ -14,7 +14,7 @@ You can also [customize](#customize) the displayed glyphs. No background daemon 
 
 ## Requirements
 
-- tmux 3.0 or newer on Linux or macOS
+- tmux 3.1 or newer on Linux or macOS
 - At least one supported agent, running directly inside a tmux pane:
   - [Pi](https://github.com/badlogic/pi-mono) 0.81.1+
   - [OpenCode](https://opencode.ai) 1.15.11+
@@ -53,7 +53,7 @@ run-shell ~/.tmux/plugins/tmux-agents-status/tmux-agents-status.tmux
 
 Loading the plugin does not change your status bar. Keep your existing formats and add these fragments once:
 
-- Append `#{E:@tmux-agents-status-window}` to both `window-status-format` and `window-status-current-format`.
+- Insert `#{E:@tmux-agents-status-window}` where you want agent glyphs in both `window-status-format` and `window-status-current-format`.
 - Insert `#{E:@tmux-agents-status-other-sessions}` anywhere in `status-right`.
 
 For example:
@@ -64,10 +64,16 @@ set -g window-status-current-format '#I:#W#{E:@tmux-agents-status-window}'
 set -g status-right '#{E:@tmux-agents-status-other-sessions}#S %H:%M'
 ```
 
-If your theme uses inline styles, reapply the desired style after a fragment:
+Each nonempty fragment inherits the foreground, background, and text attributes
+active at its insertion point, then restores them for following text. A style
+configured below acts as a partial overlay, so an `fg`-only state style keeps the
+enclosing background and attributes.
+
+To select tmux's default style instead of the enclosing inline style, put
+`#[default]` immediately before the fragment:
 
 ```tmux
-set -g status-right '#{E:@tmux-agents-status-other-sessions}#[fg=colour250]#S %H:%M'
+set -g status-right '#[default]#{E:@tmux-agents-status-other-sessions}#S %H:%M'
 ```
 
 Apply the configuration:
@@ -184,7 +190,23 @@ set -g @tmux-agents-status-unread-style 'reverse,bold'
 | `@tmux-agents-status-failed-style` | `fg=red` | Failed style |
 | `@tmux-agents-status-unread-style` | `reverse,bold` | Unread-result style |
 
-Set a glyph to an empty string to hide that state. Styles use tmux syntax without `#[...]`.
+Set a glyph to an empty string to hide that state. Styles are literal,
+single-line tmux 3.1 visual style lists without `#[...]`. Commas and ASCII spaces
+separate terms. The accepted terms are:
+
+- `default`, `none`, `fg=<colour>`, and `bg=<colour>`;
+- `bright`, `bold`, `dim`, `underscore`, `blink`, `reverse`, `hidden`,
+  `italics`, `strikethrough`, `overline`, `double-underscore`,
+  `curly-underscore`, `dotted-underscore`, and `dashed-underscore`, plus each
+  attribute's `no`-prefixed form such as `nobold`;
+- tmux 3.1 literal colours: the eight named and eight bright named colours,
+  aliases `0`–`7` and `90`–`97`, `colour0`–`colour255`, `default`, `terminal`,
+  and six-digit `#RRGGBB` values.
+
+Names are case-insensitive. Unknown terms and layout or default-scope controls
+are ignored token by token. A style containing `#{...}`, `#(...)`, a short
+format alias such as `#S`, or nested `#[...]` syntax is ignored in full.
+Filtering affects rendering only and never rewrites the stored option.
 
 ## Behavior
 
@@ -234,3 +256,9 @@ Adapters stay inactive outside tmux, when the core is missing or incompatible, a
 - The agent and tmux must run on the same host.
 - Some agents do not expose every lifecycle state shown above.
 - Nested tmux, SSH aggregation, and Windows are not supported.
+- tmux 3.0 and older are unsupported; load, runtime, cleanup, and uninstall
+  behavior on those versions is outside the compatibility contract.
+- tmux has only one pushed-default slot, not a nestable style stack. If an
+  enclosing format uses a later `default`, `push-default`, or `pop-default`, put
+  the fragment at the end of that scope or explicitly reapply the desired style
+  afterward.

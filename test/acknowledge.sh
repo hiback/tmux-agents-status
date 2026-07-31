@@ -152,7 +152,7 @@ PATH="$tmp/bin:$PATH" FAKE_TMUX_LOG="$tmp/calls" FAKE_OWNER=$$ \
 race_render=$(PATH="$tmp/bin:$PATH" FAKE_TMUX_LOG="$tmp/calls" FAKE_OWNER=$$ \
 	FAKE_RACE_STATE="$tmp/race-state-read" FAKE_RACE_ACK="$tmp/race-ack" \
 	"$root/scripts/render-window" '$1' '@1' '%42')
-[ "$race_render" = '#[default] #[fg=yellow,reverse]W#[default]' ] ||
+[ "$race_render" = '#[push-default]#[default] #[fg=yellow,reverse]W#[default]#[default]#[pop-default]' ] ||
 	fail 'the newer generation remains renderer-visible and unread against the earlier acknowledgement'
 
 printf 'ok - visible live alerts are acknowledged server-wide\n'

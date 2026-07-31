@@ -81,7 +81,7 @@ try {
 			`^v2\\|${owner}\\|pid:${process.pid}\\|turn:[^|]+\\|running\\|-\\|-\\|-$`,
 		),
 	);
-	assert.equal(render(), "#[default] R\n");
+	assert.equal(render(), "#[push-default]#[default] R#[default]#[pop-default]\n");
 	const turn = running.split("|")[3];
 
 	// A retry and queued continuation remain within the accepted turn. Only the
@@ -98,7 +98,7 @@ try {
 			`^v2\\|${owner}\\|pid:${process.pid}\\|${turn}\\|completed\\|g:[0-9a-f]{32}\\|-\\|-$`,
 		),
 	);
-	assert.equal(render(), "#[default] #[reverse]C#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]C#[default]#[default]#[pop-default]\n");
 
 	await handlers.get("session_shutdown")({ reason: "reload" }, tui);
 	const reloadHandlers = new Map();
@@ -134,7 +134,7 @@ try {
 	);
 	await reloadHandlers.get("agent_settled")({}, replacementContext);
 	assert.match(option("state"), /\|failed\|g:[0-9a-f]{32}\|-\|-$/);
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]F#[default]#[default]#[pop-default]\n");
 	await reloadHandlers.get("session_shutdown")(
 		{ reason: "quit" },
 		replacementContext,

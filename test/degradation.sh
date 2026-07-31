@@ -127,9 +127,9 @@ assert_renderer() {
 	assert_equal "$expected_error" "$actual_error" "$label stderr"
 }
 
-assert_renderer '#[default] F' '' 'window renderer isolates malformed and unknown sibling state' \
+assert_renderer '#[push-default]#[default] F#[default]#[pop-default]' '' 'window renderer isolates malformed and unknown sibling state' \
 	"$root/scripts/render-window" "\$0" '@1' '%1'
-assert_renderer '#[default]other:F ' '' 'other renderer isolates malformed and unknown sibling state' \
+assert_renderer '#[push-default]#[default]other:F #[default]#[pop-default]' '' 'other renderer isolates malformed and unknown sibling state' \
 	"$root/scripts/render-other-sessions" "\$0"
 generation=g:22222222222222222222222222222222
 incarnation=11111111-1111-4111-8111-111111111111
@@ -145,11 +145,11 @@ for invalid_record in \
 	"v2|$incarnation|pid:$$|-|running|$generation|-|-" \
 	"v2|$incarnation|pid:$$|-|failed|-|-|-" \
 	"v2|$incarnation|pid:$$|-|waiting|$generation|running|b,a"; do
-	assert_renderer '#[default] F' '' 'strict records omit one invalid sibling' \
+	assert_renderer '#[push-default]#[default] F#[default]#[pop-default]' '' 'strict records omit one invalid sibling' \
 		env FAKE_BAD_RECORD="$invalid_record" "$root/scripts/render-window" "\$0" '@1' '%1'
 done
 oversized=$(awk 'BEGIN { printf "v2|"; for (i = 0; i < 2050; i++) printf "a" }')
-assert_renderer '#[default] F' '' 'oversized records are omitted without hiding valid siblings' \
+assert_renderer '#[push-default]#[default] F#[default]#[pop-default]' '' 'oversized records are omitted without hiding valid siblings' \
 	env FAKE_BAD_RECORD="$oversized" "$root/scripts/render-window" "\$0" '@1' '%1'
 assert_renderer '' 'tmux-agents-status: render-window: required query failed' 'window required option failure degrades safely' \
 	env FAKE_FAIL=option "$root/scripts/render-window" "\$0" '@1' '%1'

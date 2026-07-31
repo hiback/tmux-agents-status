@@ -73,7 +73,7 @@ try {
 	send({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "raw-secret" });
 	const running = option("state");
 	assert.match(running, new RegExp(`^v2\\|${owner}\\|-\\|turn:[0-9a-f]{32}\\|running\\|-\\|-\\|-$`));
-	assert.equal(render(), "#[default] R\n");
+	assert.equal(render(), "#[push-default]#[default] R#[default]#[pop-default]\n");
 	const turn = field(3);
 
 	// Permission and question hooks share one approximate waiting episode.
@@ -82,7 +82,7 @@ try {
 	const generation = waiting.split("|")[5];
 	assert.equal(waiting, `v2|${owner}|-|${turn}|waiting|${generation}|running|permission`);
 	assert.match(generation, /^g:[0-9a-f]{32}$/);
-	assert.equal(render(), "#[default] #[reverse]W#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]W#[default]#[default]#[pop-default]\n");
 
 	send({ hook_event_name: "Notification", session_id: session, notification_type: "permission_prompt", message: "raw-secret" });
 	assert.equal(option("state"), waiting, "duplicate permission evidence joins the open episode");
@@ -90,7 +90,7 @@ try {
 	// Later foreground tool activity repairs the provisional wait.
 	send({ hook_event_name: "PreToolUse", session_id: session, tool_name: "Bash", tool_input: { command: "raw-secret" } });
 	assert.equal(option("state"), running, "approved activity resumes running");
-	assert.equal(render(), "#[default] R\n");
+	assert.equal(render(), "#[push-default]#[default] R#[default]#[pop-default]\n");
 
 	send({ hook_event_name: "PreToolUse", session_id: session, tool_name: "AskUserQuestion", tool_input: { questions: "raw-secret" } });
 	assert.match(option("state"), new RegExp(`^v2\\|${owner}\\|-\\|${turn}\\|waiting\\|g:[0-9a-f]{32}\\|running\\|question$`));
@@ -110,7 +110,7 @@ try {
 	send({ hook_event_name: "Stop", session_id: session, last_assistant_message: "raw-secret" });
 	const completed = option("state");
 	assert.match(completed, new RegExp(`^v2\\|${owner}\\|-\\|${turn}\\|completed\\|g:[0-9a-f]{32}\\|-\\|-$`));
-	assert.equal(render(), "#[default] #[reverse]C#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]C#[default]#[default]#[pop-default]\n");
 
 	// A turn that continued past its blocked stop repairs the provisional
 	// completion through the shared core's owner-checked dismissal.
@@ -124,7 +124,7 @@ try {
 	assert.notEqual(field(3), turn, "a new prompt starts a new turn");
 	send({ hook_event_name: "StopFailure", session_id: session, error: "overloaded", error_details: "raw-secret" });
 	assert.equal(field(4), "failed");
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]F#[default]#[default]#[pop-default]\n");
 	assert.equal(option("state").includes("raw-secret"), false, "native error content is never persisted");
 	send({ hook_event_name: "PreToolUse", session_id: session, tool_name: "Bash" });
 	assert.equal(field(4), "failed", "exact terminal failure is never repaired");
@@ -150,7 +150,7 @@ try {
 		/^v2\|-\|-\|turn:[0-9a-f]{32}\|failed\|g:[0-9a-f]{32}\|-\|-$/,
 		"graceful exit during active work reports failed",
 	);
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]F#[default]#[default]#[pop-default]\n");
 
 	// A graceful end with no reported state removes the record entirely.
 	send({ hook_event_name: "SessionStart", session_id: replacement, source: "clear" });

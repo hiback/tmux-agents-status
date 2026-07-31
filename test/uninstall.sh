@@ -34,9 +34,8 @@ server_option() {
 	tmux_test show-option -sqv "$1"
 }
 
-# tmux 3.0 reports an absent user option as success with no output, while newer
-# tmux fails the query outright. A present option always echoes its own name, so
-# empty output still distinguishes absence from an option set to an empty value.
+# A present option always echoes its own name, so empty output distinguishes
+# absence from an option set to an empty value.
 assert_absent_option() {
 	if value=$(tmux_test show-options "$1" "$2" 2>/dev/null) && [ -n "$value" ]; then
 		fail "$3"
@@ -153,40 +152,5 @@ assert_equal "window-pane-changed[0] display-message user-before
 window-pane-changed[2] $hook_command
 window-pane-changed[3] display-message user-after" "$(tmux_test show-hooks -g window-pane-changed)" 'repeated uninstall leaves user hooks unchanged'
 assert_equal 'USER-FAILED' "$(global_option @tmux-agents-status-failed-glyph)" 'repeated uninstall preserves retained user options'
-
-mkdir "$tmp/tmux-3.0-bin"
-cat >"$tmp/tmux-3.0-bin/tmux" <<'EOF'
-#!/bin/sh
-{
-	for argument do printf '<%s>' "$argument"; done
-	printf '\n'
-} >>"$FAKE_TMUX_LOG"
-case $1:$2 in
-show-options:-g)
-	if [ "$#" -eq 2 ] || [ "$3" = @tmux-agents-status-waiting-glyph ]; then
-		printf "@tmux-agents-status-waiting-glyph '?'\n"
-	fi
-	;;
-show-options:-s)
-	# tmux 3.0 reports absent exact server options as success with no output.
-	: ;;
-show-option:-gqv)
-	[ "$3" != @tmux-agents-status-waiting-glyph ] || printf '?\n'
-	;;
-show-option:-sqv | show-hooks:-g | list-clients:-F)
-	: ;;
-esac
-EOF
-chmod +x "$tmp/tmux-3.0-bin/tmux"
-: >"$tmp/tmux-3.0-calls"
-PATH="$tmp/tmux-3.0-bin:$PATH" FAKE_TMUX_LOG="$tmp/tmux-3.0-calls" \
-	"$root/scripts/uninstall" >"$tmp/tmux-3.0-output" 2>"$tmp/tmux-3.0-error"
-[ ! -s "$tmp/tmux-3.0-error" ] || fail 'tmux 3.0-compatible absent-option handling remains silent'
-if grep -Fq '<set-option><-gu><@tmux-agents-status-waiting-glyph>' "$tmp/tmux-3.0-calls"; then
-	fail 'tmux 3.0 absent-marker semantics never remove a pre-existing equal-to-default option'
-fi
-if grep -Fq '<refresh-client>' "$tmp/tmux-3.0-calls"; then
-	fail 'a repeated tmux 3.0 uninstall without owned state does not refresh'
-fi
 
 printf 'ok - core uninstall removes only plugin-owned runtime state\n'

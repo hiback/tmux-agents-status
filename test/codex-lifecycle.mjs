@@ -61,7 +61,7 @@ try {
 	send({ hook_event_name: "UserPromptSubmit", session_id: session, turn_id: turnA, prompt: "raw-secret" });
 	const running = option("state");
 	assert.equal(running, `v2|${owner}|-|turn:${turnA}|running|-|-|-`, "prompt submission reports approximate running");
-	assert.equal(render(), "#[default] R\n");
+	assert.equal(render(), "#[push-default]#[default] R#[default]#[pop-default]\n");
 
 	send({ hook_event_name: "PreToolUse", session_id: session, turn_id: turnA, tool_name: "Bash", tool_input: { command: "raw-secret" } });
 	assert.equal(option("state"), running, "activity inside a reported turn changes nothing");
@@ -72,7 +72,7 @@ try {
 	const generation = waiting.split("|")[5];
 	assert.equal(waiting, `v2|${owner}|-|turn:${turnA}|waiting|${generation}|running|permission`);
 	assert.match(generation, /^g:[0-9a-f]{32}$/);
-	assert.equal(render(), "#[default] #[reverse]W#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]W#[default]#[default]#[pop-default]\n");
 
 	send({ hook_event_name: "PermissionRequest", session_id: session, turn_id: turnA, tool_name: "apply_patch", tool_input: { command: "raw-secret" } });
 	assert.equal(option("state"), waiting, "a second approval request joins the open episode");
@@ -85,7 +85,7 @@ try {
 	send({ hook_event_name: "Stop", session_id: session, turn_id: turnA, stop_hook_active: false, last_assistant_message: "raw-secret" });
 	const completed = option("state");
 	assert.match(completed, new RegExp(`^v2\\|${owner}\\|-\\|turn:${turnA}\\|completed\\|g:[0-9a-f]{32}\\|-\\|-$`));
-	assert.equal(render(), "#[default] #[reverse]C#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]C#[default]#[default]#[pop-default]\n");
 
 	// A turn that continued past its blocked stop repairs the provisional
 	// completion through the shared core's owner-checked dismissal.
@@ -107,7 +107,7 @@ try {
 	assert.equal(field(4), "running", "a delayed notify from a superseded turn is ignored");
 	notify({ type: "agent-turn-complete", "thread-id": session, "turn-id": turnB, cwd: "/work", "last-assistant-message": "raw-secret" });
 	assert.equal(field(4), "completed", "agent-turn-complete reports approximate completion");
-	assert.equal(render(), "#[default] #[reverse]C#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]C#[default]#[default]#[pop-default]\n");
 
 	// User cancellation and failed turns expose no native evidence, so the
 	// adapter must never invent a failed outcome for them.
@@ -125,7 +125,7 @@ try {
 		new RegExp(`^v2\\|-\\|-\\|turn:${turnA}\\|failed\\|g:[0-9a-f]{32}\\|-\\|-$`),
 		"graceful exit during active work reports failed",
 	);
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]F#[default]#[default]#[pop-default]\n");
 
 	// A later session replaces stale ownership without a false failure.
 	const replacement = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";

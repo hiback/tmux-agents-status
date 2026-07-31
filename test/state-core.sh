@@ -66,7 +66,7 @@ assert_equal '' "$(option "$ack_option")" 'claim clears prior acknowledgement'
 core 2 start "$owner" "$turn"
 running="v2|$owner|pid:$$|$turn|running|-|-|-"
 assert_equal "$running" "$(option "$state_option")" 'start publishes strict v2 running state'
-assert_equal '#[default] R' "$(TMUX="$server_tmux" "$root/scripts/render-window" "$session" "$window" "$pane")" 'the renderer exposes core-published running state'
+assert_equal '#[push-default]#[default] R#[default]#[pop-default]' "$(TMUX="$server_tmux" "$root/scripts/render-window" "$session" "$window" "$pane")" 'the renderer exposes core-published running state'
 core 2 start "$owner" "$turn"
 assert_equal "$running" "$(option "$state_option")" 'a replayed start is idempotent'
 core 2 claim "$owner" "pid:$$"

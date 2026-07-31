@@ -1,20 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Config-load time has no current target on tmux 3.0, so the version cannot be
-# read through a format.
-version=$(tmux -V)
-version=${version#tmux }
-major=${version%%.*}
-case $major in
-    '' | *[!0-9]*) supported=false ;;
-    *) [ "$major" -ge 3 ] && supported=true || supported=false ;;
-esac
-if [ "$supported" = false ]; then
-    printf 'tmux-agents-status: tmux 3.0 or newer is required (found %s)\n' "$version" >&2
-    exit 1
-fi
-
 root=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 
 tmux set-option -g @tmux-agents-status-root "$root"

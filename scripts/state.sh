@@ -63,26 +63,109 @@ tas_read_option() {
 	esac
 }
 
+tas_style_colour_allowed() {
+	case $1 in
+	black | red | green | yellow | blue | magenta | cyan | white | \
+	brightblack | brightred | brightgreen | brightyellow | brightblue | brightmagenta | brightcyan | brightwhite | \
+	0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 90 | 91 | 92 | 93 | 94 | 95 | 96 | 97 | \
+	default | terminal)
+		return 0
+		;;
+	\#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+		return 0
+		;;
+	colour[0-9]*)
+		tas_style_colour_number=${1#colour}
+		case $tas_style_colour_number in '' | *[!0-9]*) return 1 ;; esac
+		[ "$tas_style_colour_number" -le 255 ] 2>/dev/null
+		;;
+	*) return 1 ;;
+	esac
+}
+
+tas_style_token_allowed() {
+	case $1 in
+	default | none | \
+	bright | bold | dim | underscore | blink | reverse | hidden | italics | strikethrough | overline | \
+	double-underscore | curly-underscore | dotted-underscore | dashed-underscore | \
+	nobright | nobold | nodim | nounderscore | noblink | noreverse | nohidden | noitalics | nostrikethrough | nooverline | \
+	nodouble-underscore | nocurly-underscore | nodotted-underscore | nodashed-underscore)
+		return 0
+		;;
+	fg=* | bg=*) tas_style_colour_allowed "${1#*=}" ;;
+	*) return 1 ;;
+	esac
+}
+
+tas_filter_style() {
+	tas_style_original=$1
+	case $tas_style_original in
+	*'#{'* | *'#('* | *'#['*)
+		tas_filtered_style=
+		return 0
+		;;
+	esac
+	tas_style_lower=$(printf '%s' "$tas_style_original" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz') || return 1
+	tas_filtered_style=
+	while [ -n "$tas_style_lower" ]; do
+		tas_style_lower_token=${tas_style_lower%%[ ,]*}
+		tas_style_original_token=${tas_style_original%%[ ,]*}
+		if [ "$tas_style_lower_token" = "$tas_style_lower" ]; then
+			tas_style_lower=
+			tas_style_original=
+		else
+			tas_style_lower=${tas_style_lower#"$tas_style_lower_token"}
+			tas_style_lower=${tas_style_lower#?}
+			tas_style_original=${tas_style_original#"$tas_style_original_token"}
+			tas_style_original=${tas_style_original#?}
+		fi
+		[ -n "$tas_style_lower_token" ] || continue
+		# Tmux 3.1 short format aliases overlap with hexadecimal RGB prefixes.
+		case $tas_style_lower_token in
+		fg=\#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] | bg=\#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+			tas_style_literal_rgb=true
+			;;
+		*) tas_style_literal_rgb=false ;;
+		esac
+		if [ "$tas_style_literal_rgb" = false ]; then
+			case $tas_style_original_token in
+			*'#D'* | *'#F'* | *'#H'* | *'#h'* | *'#I'* | *'#P'* | *'#S'* | *'#T'* | *'#W'*)
+				tas_filtered_style=
+				return 0
+				;;
+			esac
+		fi
+		if tas_style_token_allowed "$tas_style_lower_token"; then
+			tas_filtered_style=${tas_filtered_style}${tas_filtered_style:+,}$tas_style_original_token
+		fi
+	done
+}
+
 tas_load_options() {
 	tas_load_schema
 	tas_read_option @tmux-agents-status-running-glyph || return 1
 	tas_running_glyph=$tas_option
 	tas_read_option @tmux-agents-status-running-style || return 1
-	tas_running_style=$tas_option
+	tas_filter_style "$tas_option" || return 1
+	tas_running_style=$tas_filtered_style
 	tas_read_option @tmux-agents-status-waiting-glyph || return 1
 	tas_waiting_glyph=$tas_option
 	tas_read_option @tmux-agents-status-waiting-style || return 1
-	tas_waiting_style=$tas_option
+	tas_filter_style "$tas_option" || return 1
+	tas_waiting_style=$tas_filtered_style
 	tas_read_option @tmux-agents-status-completed-glyph || return 1
 	tas_completed_glyph=$tas_option
 	tas_read_option @tmux-agents-status-completed-style || return 1
-	tas_completed_style=$tas_option
+	tas_filter_style "$tas_option" || return 1
+	tas_completed_style=$tas_filtered_style
 	tas_read_option @tmux-agents-status-failed-glyph || return 1
 	tas_failed_glyph=$tas_option
 	tas_read_option @tmux-agents-status-failed-style || return 1
-	tas_failed_style=$tas_option
+	tas_filter_style "$tas_option" || return 1
+	tas_failed_style=$tas_filtered_style
 	tas_read_option @tmux-agents-status-unread-style || return 1
-	tas_unread_style=$tas_option
+	tas_filter_style "$tas_option" || return 1
+	tas_unread_style=$tas_filtered_style
 }
 
 tas_read_stored_record() {
@@ -218,4 +301,8 @@ tas_present_glyph() {
 	else
 		printf '%s' "$tas_present_escaped"
 	fi
+}
+
+tas_present_fragment() {
+	[ -z "$1" ] || printf '#[push-default]#[default]%s#[default]#[pop-default]' "$1"
 }

@@ -15,7 +15,6 @@ curl -fsSL \
 tar -xzf "$work/tmux.tar.gz" -C "$work"
 
 cd "$work/tmux-$version"
-# tmux 3.0 predates the C99-by-default toolchains CI now ships.
-./configure --prefix="$prefix" CFLAGS='-std=gnu99 -Wno-error'
+./configure --prefix="$prefix"
 make -j"$(getconf _NPROCESSORS_ONLN)"
 make install

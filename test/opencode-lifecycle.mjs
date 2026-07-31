@@ -114,7 +114,7 @@ try {
 			`^v2\\|${owner}\\|pid:${process.pid}\\|turn:[^|]+\\|running\\|-\\|-\\|-$`,
 		),
 	);
-	assert.equal(render(), "#[default] R\n");
+	assert.equal(render(), "#[push-default]#[default] R#[default]#[pop-default]\n");
 	const turn = field(3);
 
 	// Correlated permission and question requests share one waiting episode.
@@ -129,7 +129,7 @@ try {
 		`v2|${owner}|pid:${process.pid}|${turn}|waiting|${generation}|running|per_live`,
 	);
 	assert.match(generation, /^g:[0-9a-f]{32}$/);
-	assert.equal(render(), "#[default] #[reverse]W#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]W#[default]#[default]#[pop-default]\n");
 
 	await send({
 		type: "question.asked",
@@ -165,7 +165,7 @@ try {
 		},
 	});
 	assert.equal(option("state"), running, "the final reply resumes running");
-	assert.equal(render(), "#[default] R\n");
+	assert.equal(render(), "#[push-default]#[default] R#[default]#[pop-default]\n");
 
 	await status("ses_live", "idle");
 	assert.match(
@@ -175,7 +175,7 @@ try {
 		),
 		"terminal idle without failure evidence completes the turn",
 	);
-	assert.equal(render(), "#[default] #[reverse]C#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]C#[default]#[default]#[pop-default]\n");
 
 	// Typed failure evidence classifies the next turn of the same session.
 	await status("ses_live", "busy");
@@ -189,7 +189,7 @@ try {
 	});
 	await status("ses_live", "idle");
 	assert.equal(field(4), "failed");
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]F#[default]#[default]#[pop-default]\n");
 	assert.equal(
 		option("state").includes("raw-secret"),
 		false,
@@ -219,7 +219,7 @@ try {
 		/^v2\|-\|-\|turn:[^|]+\|failed\|g:[0-9a-f]{32}\|-\|-$/,
 		"disposal during active work publishes failure and removes ownership",
 	);
-	assert.equal(render(), "#[default] #[reverse]F#[default]\n");
+	assert.equal(render(), "#[push-default]#[default] #[reverse]F#[default]#[default]#[pop-default]\n");
 
 	await status("ses_next", "busy");
 	assert.match(
