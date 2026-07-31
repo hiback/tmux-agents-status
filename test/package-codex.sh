@@ -100,10 +100,10 @@ grep -E 'set-option|set-hook|tas_parse_record' "$hook" >/dev/null &&
 	fail 'the adapter never writes tmux state or embeds a fallback core'
 
 # Native hook trust is the user's separate decision and is never bypassed, by
-# the artifact or by the release path that installs and exercises it.
+# the artifact or by the verification path that installs and exercises it.
 grep -rF 'dangerously-bypass-hook-trust' \
-	"$plugin" "$marketplace" "$root/test/smoke-codex.sh" "$root/.github/workflows/release-codex.yml" >/dev/null &&
-	fail 'neither the Codex artifact nor its release path bypasses native hook trust'
+	"$plugin" "$marketplace" "$root/test/smoke-codex.sh" "$root/.github/workflows/verify-codex.yml" >/dev/null &&
+	fail 'neither the Codex artifact nor its verification path bypasses native hook trust'
 grep -rF 'app-server' "$plugin" >/dev/null &&
 	fail 'the Codex adapter never substitutes an app-server for the direct TUI'
 
