@@ -194,15 +194,14 @@ function evaluateHistory(repository, artifact, candidate, head, registryMetadata
   const candidateIsCurrent = currentEntry?.commit === headCommit && currentEntry.version.text === candidate.text;
 
   const tagHistory = tags
-    .filter((entry) => !(candidateIsCurrent && entry.tag === currentTag))
-    .map((entry) => entry.version);
+    .filter((entry) => !(candidateIsCurrent && entry.tag === currentTag));
   const registryHistory = artifacts[artifact].registry
     ? registryVersionsFor(registryMetadata, artifact).filter(
       (version) => !(candidateIsCurrent && version.text === candidate.text),
     )
     : [];
 
-  for (const version of [...tagHistory, ...registryHistory]) {
+  for (const version of [...tagHistory.map((entry) => entry.version), ...registryHistory]) {
     if (compareVersions(version, candidate) >= 0) {
       throw new PolicyError(
         `${artifact} candidate ${candidate.text} must be greater than historical version ${version.text}`,
@@ -211,14 +210,19 @@ function evaluateHistory(repository, artifact, candidate, head, registryMetadata
   }
 
   // Only an installed public package can be an npm adapter's update source.
-  const predecessorHistory = artifacts[artifact].registry ? registryHistory : tagHistory;
-  let previous;
-  for (const version of predecessorHistory) {
-    if (previous === undefined || compareVersions(version, previous) > 0) {
-      previous = version;
+  const predecessorHistory = artifacts[artifact].registry
+    ? registryHistory.map((version) => ({ version, tag: "" }))
+    : tagHistory.map((entry) => ({ version: entry.version, tag: entry.tag }));
+  let predecessor;
+  for (const entry of predecessorHistory) {
+    if (predecessor === undefined || compareVersions(entry.version, predecessor.version) > 0) {
+      predecessor = entry;
     }
   }
-  return previous?.text ?? "";
+  return {
+    previous: predecessor?.version.text ?? "",
+    previousTag: predecessor?.tag ?? "",
+  };
 }
 
 function checkChanges(options) {
@@ -439,7 +443,7 @@ function checkArtifact(options) {
   }
 
   const registryMetadata = readRegistryVersions(options.get("registry-versions"));
-  const previous = evaluateHistory(
+  const { previous, previousTag } = evaluateHistory(
     repository,
     artifact,
     candidate,
@@ -447,7 +451,9 @@ function checkArtifact(options) {
     registryMetadata,
     tag,
   );
-  process.stdout.write(`candidate=${candidate.text}\nprevious=${previous}\n`);
+  process.stdout.write(
+    `candidate=${candidate.text}\nprevious=${previous}\nprevious_tag=${previousTag}\n`,
+  );
 }
 
 function usage() {

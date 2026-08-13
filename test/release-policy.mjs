@@ -431,6 +431,37 @@ for (const artifact of ["pi", "opencode", "claude", "codex"]) {
   const accepted = checkArtifact(repository, artifact, `${artifact}-v1.1.0`, options);
   assert.match(accepted.stdout, /candidate=1\.1\.0/);
   assert.match(accepted.stdout, /previous=1\.0\.0/);
+  const expectedPreviousTag = artifacts[artifact].lock ? "" : `${artifact}-v1.0.0`;
+  assert.match(accepted.stdout, new RegExp(`previous_tag=${expectedPreviousTag}\\n`));
+}
+
+for (const artifact of ["core", "claude", "codex"]) {
+  const repository = createRepository();
+  for (const version of ["1.9.0", "1.11.0", "1.2.0", "1.10.0"]) {
+    if (artifact !== "core") setVersion(repository, artifact, version);
+    append(repository, "README.md", `${artifact} ${version}\n`);
+    commit(repository, `${artifact} ${version} checkpoint`);
+    git(repository, "tag", `${artifact}-v${version}`);
+  }
+  if (artifact !== "core") setVersion(repository, artifact, "2.0.0");
+  append(repository, "README.md", `${artifact} 2.0.0\n`);
+  commit(repository, `${artifact} candidate checkpoint`);
+  git(repository, "tag", `${artifact}-v2.0.0`);
+
+  const accepted = checkArtifact(repository, artifact, `${artifact}-v2.0.0`);
+  assert.equal(
+    accepted.stdout,
+    `candidate=2.0.0\nprevious=1.11.0\nprevious_tag=${artifact}-v1.11.0\n`,
+  );
+}
+
+for (const artifact of ["core", "pi", "opencode", "claude", "codex"]) {
+  const repository = createRepository();
+  const tag = `${artifact}-v${artifact === "core" ? "0.1.0" : "1.0.0"}`;
+  git(repository, "tag", tag);
+  const accepted = checkArtifact(repository, artifact, tag);
+  assert.match(accepted.stdout, /previous=\n/);
+  assert.match(accepted.stdout, /previous_tag=\n/);
 }
 
 {
@@ -475,6 +506,18 @@ for (const artifact of ["pi", "opencode", "claude", "codex"]) {
   const accepted = checkArtifact(repository, "core", "core-v0.1.0");
   assert.match(accepted.stdout, /candidate=0\.1\.0/);
   assert.match(accepted.stdout, /previous=\n/);
+  assert.match(accepted.stdout, /previous_tag=\n/);
+}
+
+{
+  const repository = createRepository();
+  git(repository, "tag", "core-v0.1.0");
+  append(repository, "README.md");
+  commit(repository, "core checkpoint candidate");
+  git(repository, "tag", "core-v0.2.0");
+  const accepted = checkArtifact(repository, "core", "core-v0.2.0");
+  assert.match(accepted.stdout, /previous=0\.1\.0/);
+  assert.match(accepted.stdout, /previous_tag=core-v0\.1\.0/);
 }
 
 {
