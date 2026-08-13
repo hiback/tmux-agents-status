@@ -1,7 +1,7 @@
 name: Verify Codex adapter
 
-# Codex users consume this repository's rolling marketplace on main. A
-# component tag is therefore a verification checkpoint, not a publication.
+# Codex users consume this repository's rolling marketplace on main. Its
+# artifact tag is an independent verification checkpoint, not a publication.
 on:
   push:
     tags: ["codex-v*"]
@@ -11,155 +11,12 @@ permissions:
   contents: read
 
 jobs:
-  verify-tag:
+  marketplace-verification:
     if: github.repository == 'hiback/tmux-agents-status'
-    runs-on: ubuntu-latest
-    outputs:
-      previous: ${{ steps.policy.outputs.previous }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - name: Verify the tag, manifest, and component history
-        id: policy
-        run: |
-          result=$(node scripts/release-policy.mjs check-artifact \
-            --artifact codex \
-            --tag "$GITHUB_REF_NAME" \
-            --head "$GITHUB_SHA")
-          printf '%s\n' "$result"
-          printf '%s\n' "$result" >>"$GITHUB_OUTPUT"
-
-      - name: Verify the tagged commit is on the default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" || {
-            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
-            exit 1
-          }
-
-  main-ci-proof:
-    needs: verify-tag
     permissions:
       actions: read
       contents: read
-    uses: ./.github/workflows/ci-proof.yml
+    uses: ./.github/workflows/marketplace-verification.yml
     with:
+      artifact: codex
       sha: ${{ github.sha }}
-
-  # Archive once so both native-agent lanes install identical marketplace bytes.
-  stage:
-    needs: [verify-tag, main-ci-proof]
-    runs-on: ubuntu-latest
-    outputs:
-      hooks: ${{ steps.digests.outputs.hooks }}
-      hook: ${{ steps.digests.outputs.hook }}
-      previous: ${{ steps.previous.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.sha }}
-
-      # git archive preserves the hook executable bit.
-      - name: Stage the candidate marketplace
-        run: |
-          mkdir -p "$RUNNER_TEMP/staged"
-          git archive --format=tar -o "$RUNNER_TEMP/staged/marketplace.tar" \
-            "$GITHUB_SHA" .agents/plugins packages/codex
-
-      # These digests bind the tracked definition and executable to what both
-      # smoke lanes find in Codex's installed cache before they trust anything.
-      - name: Record the staged hook definition and executable
-        id: digests
-        run: |
-          hooks=$(sha256sum packages/codex/hooks/hooks.json | cut -d' ' -f1)
-          hook=$(sha256sum packages/codex/bin/tmux-agents-status-hook | cut -d' ' -f1)
-          cat packages/codex/hooks/hooks.json
-          echo "hooks/hooks.json sha256: $hooks"
-          echo "bin/tmux-agents-status-hook sha256: $hook"
-          {
-            echo "hooks=$hooks"
-            echo "hook=$hook"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Stage the greatest prior component version
-        id: previous
-        env:
-          PREVIOUS_VERSION: ${{ needs.verify-tag.outputs.previous }}
-        run: |
-          tag=
-          if [ -n "$PREVIOUS_VERSION" ]; then
-            tag=codex-v$PREVIOUS_VERSION
-            git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" \
-              "$tag" .agents/plugins packages/codex
-          fi
-          echo "tag=$tag" >>"$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: staged-codex
-          path: ${{ runner.temp }}/staged/*.tar
-          if-no-files-found: error
-          retention-days: 7
-
-  # Installing the plugin must trust nothing. Each lane then proves Codex's own
-  # review activates exactly the staged hook bytes and that uninstall disables it.
-  smoke:
-    needs: stage
-    runs-on: ${{ matrix.os }}
-    environment: codex-verification
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - uses: ./.github/actions/setup-tmux
-        with:
-          version: current
-
-      - name: Install the current stable agent
-        run: npm install --global @openai/codex
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: staged-codex
-          path: ${{ runner.temp }}/staged
-
-      - name: Unpack the staged marketplace
-        env:
-          PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/staged/marketplace"
-          tar -xf "$RUNNER_TEMP/staged/marketplace.tar" -C "$RUNNER_TEMP/staged/marketplace"
-          if [ -n "$PREVIOUS" ]; then
-            mkdir -p "$RUNNER_TEMP/staged/previous"
-            tar -xf "$RUNNER_TEMP/staged/previous.tar" -C "$RUNNER_TEMP/staged/previous"
-            echo "PREVIOUS_DIR=$RUNNER_TEMP/staged/previous" >>"$GITHUB_ENV"
-          fi
-
-      - name: Smoke the staged artifact through the real agent
-        env:
-          TAS_CODEX_HOOKS_SHA256: ${{ needs.stage.outputs.hooks }}
-          TAS_CODEX_HOOK_SHA256: ${{ needs.stage.outputs.hook }}
-          TAS_SMOKE_MODEL: gpt-5.6-luna
-          OPENAI_API_KEY: ${{ secrets.SMOKE_OPENAI_API_KEY }}
-        run: |
-          tmux -V
-          ./test/smoke-codex.sh "$RUNNER_TEMP/staged/marketplace" "${PREVIOUS_DIR-}"

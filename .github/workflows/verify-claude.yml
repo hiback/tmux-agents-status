@@ -1,7 +1,7 @@
 name: Verify Claude Code adapter
 
-# Claude Code users consume this repository's rolling marketplace on main. A
-# component tag is therefore a verification checkpoint, not a publication.
+# Claude Code users consume this repository's rolling marketplace on main. Its
+# artifact tag is an independent verification checkpoint, not a publication.
 on:
   push:
     tags: ["claude-v*"]
@@ -11,134 +11,12 @@ permissions:
   contents: read
 
 jobs:
-  verify-tag:
+  marketplace-verification:
     if: github.repository == 'hiback/tmux-agents-status'
-    runs-on: ubuntu-latest
-    outputs:
-      previous: ${{ steps.policy.outputs.previous }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - name: Verify the tag, manifest, and component history
-        id: policy
-        run: |
-          result=$(node scripts/release-policy.mjs check-artifact \
-            --artifact claude \
-            --tag "$GITHUB_REF_NAME" \
-            --head "$GITHUB_SHA")
-          printf '%s\n' "$result"
-          printf '%s\n' "$result" >>"$GITHUB_OUTPUT"
-
-      - name: Verify the tagged commit is on the default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" || {
-            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
-            exit 1
-          }
-
-  main-ci-proof:
-    needs: verify-tag
     permissions:
       actions: read
       contents: read
-    uses: ./.github/workflows/ci-proof.yml
+    uses: ./.github/workflows/marketplace-verification.yml
     with:
+      artifact: claude
       sha: ${{ github.sha }}
-
-  # Archive once so both native-agent lanes install identical marketplace bytes.
-  stage:
-    needs: [verify-tag, main-ci-proof]
-    runs-on: ubuntu-latest
-    outputs:
-      previous: ${{ steps.previous.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.sha }}
-
-      # git archive preserves the hook executable bit.
-      - name: Stage the candidate marketplace
-        run: |
-          mkdir -p "$RUNNER_TEMP/staged"
-          git archive --format=tar -o "$RUNNER_TEMP/staged/marketplace.tar" \
-            "$GITHUB_SHA" .claude-plugin packages/claude
-
-      - name: Stage the greatest prior component version
-        id: previous
-        env:
-          PREVIOUS_VERSION: ${{ needs.verify-tag.outputs.previous }}
-        run: |
-          tag=
-          if [ -n "$PREVIOUS_VERSION" ]; then
-            tag=claude-v$PREVIOUS_VERSION
-            git archive --format=tar -o "$RUNNER_TEMP/staged/previous.tar" \
-              "$tag" .claude-plugin packages/claude
-          fi
-          echo "tag=$tag" >>"$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: staged-claude
-          path: ${{ runner.temp }}/staged/*.tar
-          if-no-files-found: error
-          retention-days: 7
-
-  smoke:
-    needs: stage
-    runs-on: ${{ matrix.os }}
-    environment: claude-verification
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - uses: ./.github/actions/setup-tmux
-        with:
-          version: current
-
-      - name: Install the current stable agent
-        run: npm install --global @anthropic-ai/claude-code
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: staged-claude
-          path: ${{ runner.temp }}/staged
-
-      - name: Unpack the staged marketplace
-        env:
-          PREVIOUS: ${{ matrix.os == 'ubuntu-latest' && needs.stage.outputs.previous || '' }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/staged/marketplace"
-          tar -xf "$RUNNER_TEMP/staged/marketplace.tar" -C "$RUNNER_TEMP/staged/marketplace"
-          if [ -n "$PREVIOUS" ]; then
-            mkdir -p "$RUNNER_TEMP/staged/previous"
-            tar -xf "$RUNNER_TEMP/staged/previous.tar" -C "$RUNNER_TEMP/staged/previous"
-            echo "PREVIOUS_DIR=$RUNNER_TEMP/staged/previous" >>"$GITHUB_ENV"
-          fi
-
-      - name: Smoke the staged artifact through the real agent
-        env:
-          TAS_SMOKE_MODEL: claude-haiku-4-5
-          ANTHROPIC_API_KEY: ${{ secrets.SMOKE_ANTHROPIC_API_KEY }}
-        run: |
-          tmux -V
-          ./test/smoke-claude.sh "$RUNNER_TEMP/staged/marketplace" "${PREVIOUS_DIR-}"

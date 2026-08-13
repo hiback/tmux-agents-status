@@ -1,0 +1,170 @@
+name: Verify repository marketplace artifact
+
+# This workflow owns the common hosted sequence. Artifact-native paths, agent
+# installation, smoke behavior, models, and trust evidence stay behind the
+# production marketplace-verification command.
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: Repository marketplace artifact to verify
+        required: true
+        type: string
+      sha:
+        description: Commit identified by the triggering verification checkpoint
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    outputs:
+      previous_tag: ${{ steps.policy.outputs.previous_tag }}
+    steps:
+      # A false caller or a non-tag event must fail, not silently skip the
+      # credential-free prerequisite and leave a dynamic environment eligible.
+      - name: Reject an untrusted event or artifact
+        if: >-
+          github.repository != 'hiback/tmux-agents-status' ||
+          github.event_name != 'push' ||
+          github.event.deleted == true ||
+          github.ref_type != 'tag' ||
+          github.ref != format('refs/tags/{0}', github.ref_name) ||
+          inputs.sha != github.sha ||
+          (inputs.artifact != 'claude' && inputs.artifact != 'codex')
+        run: exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Verify the checkpoint and artifact history
+        id: policy
+        env:
+          ARTIFACT: ${{ inputs.artifact }}
+          TAGGED_SHA: ${{ inputs.sha }}
+          TRUSTED_TAG: ${{ github.ref_name }}
+        run: |
+          result=$(node scripts/release-policy.mjs check-artifact \
+            --artifact "$ARTIFACT" \
+            --tag "$TRUSTED_TAG" \
+            --head "$TAGGED_SHA")
+          printf '%s\n' "$result"
+          printf '%s\n' "$result" >>"$GITHUB_OUTPUT"
+
+      - name: Verify the checkpoint is on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TAGGED_SHA: ${{ inputs.sha }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$TAGGED_SHA" "origin/$DEFAULT_BRANCH" || {
+            echo "$GITHUB_REF_NAME is not on $DEFAULT_BRANCH" >&2
+            exit 1
+          }
+
+  main-ci-proof:
+    needs: policy
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/ci-proof.yml
+    with:
+      sha: ${{ inputs.sha }}
+
+  # Stage the candidate, optional predecessor, and native evidence receipt once.
+  stage:
+    needs: [policy, main-ci-proof]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Stage the receipt-bound marketplace
+        env:
+          ARTIFACT: ${{ inputs.artifact }}
+          PREVIOUS_TAG: ${{ needs.policy.outputs.previous_tag }}
+          STAGED_DIRECTORY: ${{ runner.temp }}/staged-marketplace
+          TAGGED_SHA: ${{ inputs.sha }}
+        run: |
+          set -- \
+            --artifact "$ARTIFACT" \
+            --sha "$TAGGED_SHA" \
+            --output "$STAGED_DIRECTORY"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            set -- "$@" --previous-tag "$PREVIOUS_TAG"
+          fi
+          node scripts/marketplace-verification.mjs stage "$@"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: staged-marketplace
+          path: ${{ runner.temp }}/staged-marketplace
+          if-no-files-found: error
+          retention-days: 7
+
+  # Both lanes validate the same receipt and bytes. Linux alone asks the native
+  # adapter to exercise update from the receipt's optional predecessor.
+  smoke:
+    needs: stage
+    runs-on: ${{ matrix.os }}
+    environment: ${{ inputs.artifact }}-verification
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            update: true
+          - os: macos-latest
+            update: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-tmux
+        with:
+          version: current
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: staged-marketplace
+          path: ${{ runner.temp }}/staged-marketplace
+
+      # GitHub resolves environment secrets in workflow configuration. The
+      # unselected provider value is deliberately empty before the dispatcher
+      # gives the selected adapter its credential.
+      - name: Smoke the staged marketplace through the native adapter
+        env:
+          ARTIFACT: ${{ inputs.artifact }}
+          SMOKE_ANTHROPIC_API_KEY: ${{ inputs.artifact == 'claude' && secrets.SMOKE_ANTHROPIC_API_KEY || '' }}
+          SMOKE_OPENAI_API_KEY: ${{ inputs.artifact == 'codex' && secrets.SMOKE_OPENAI_API_KEY || '' }}
+          STAGED_DIRECTORY: ${{ runner.temp }}/staged-marketplace
+          TAGGED_SHA: ${{ inputs.sha }}
+          UPDATE: ${{ matrix.update }}
+        run: |
+          tmux -V
+          node scripts/marketplace-verification.mjs smoke \
+            --artifact "$ARTIFACT" \
+            --sha "$TAGGED_SHA" \
+            --staged "$STAGED_DIRECTORY" \
+            --update "$UPDATE"
