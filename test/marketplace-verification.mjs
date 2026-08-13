@@ -963,3 +963,4 @@ printf 'ok - fake Claude native smoke\\n'
 }
 
 console.log("ok - staged Claude marketplace verification contract");
+await import("./marketplace-verification-codex.mjs");

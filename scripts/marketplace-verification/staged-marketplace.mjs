@@ -52,21 +52,23 @@ function redact(value, redactions = []) {
 function execute(command, arguments_, options = {}) {
   const result = spawnSync(command, arguments_, {
     cwd: options.cwd,
-    encoding: "utf8",
+    encoding: options.binaryOutput ? null : "utf8",
     env: options.env ?? localEnvironment(),
   });
   if (result.error) {
     throw new MarketplaceVerificationError(`could not run ${command}`);
   }
+  const stdout = Buffer.isBuffer(result.stdout) ? result.stdout.toString("utf8") : result.stdout;
+  const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : result.stderr;
   if (result.status !== 0) {
-    const detail = redact((result.stderr || result.stdout).trim(), options.redactions);
+    const detail = redact((stderr || stdout).trim(), options.redactions);
     throw new MarketplaceVerificationError(
       `${command} failed${detail ? `: ${detail}` : ""}`,
     );
   }
   if (options.emitOutput) {
-    process.stdout.write(redact(result.stdout, options.redactions));
-    process.stderr.write(redact(result.stderr, options.redactions));
+    process.stdout.write(redact(stdout, options.redactions));
+    process.stderr.write(redact(stderr, options.redactions));
   }
   return result;
 }
@@ -215,8 +217,8 @@ export function stageMarketplace({ adapter, artifact, output, previousTag, repos
 
   try {
     requireCommit(repository, sha, "--sha must identify a Git commit");
-    const runInRepository = (command, arguments_) =>
-      execute(command, arguments_, { cwd: repository });
+    const runInRepository = (command, arguments_, options = {}) =>
+      execute(command, arguments_, { ...options, cwd: repository });
     const candidateArchive = join(temporaryOutput, candidateArchiveName);
     adapter.archiveMarketplace({
       execute: runInRepository,
@@ -252,7 +254,10 @@ export function stageMarketplace({ adapter, artifact, output, previousTag, repos
       sha,
       marketplaceSha256: sha256(candidateArchive),
       predecessor,
-      adapterEvidence: adapter.createAdapterEvidence({ archive: candidateArchive }),
+      adapterEvidence: adapter.createAdapterEvidence({
+        archive: candidateArchive,
+        execute: runInRepository,
+      }),
     };
     writeFileSync(join(temporaryOutput, receiptName), `${JSON.stringify(receipt, null, 2)}\n`);
     const expectedFiles = [candidateArchiveName, receiptName];
@@ -310,9 +315,9 @@ export function smokeMarketplace({ adapter, artifact, sha, staged, update }) {
     mkdirSync(archiveDirectory);
     const validatedCandidateArchive = join(archiveDirectory, candidateArchiveName);
     writeFileSync(validatedCandidateArchive, candidateBytes);
-    adapter.validateAdapterEvidence(
+    const adapterEvidence = adapter.validateAdapterEvidence(
       receipt.adapterEvidence,
-      { candidateArchive: validatedCandidateArchive },
+      { candidateArchive: validatedCandidateArchive, execute },
     );
 
     const candidateDirectory = join(work, "marketplace");
@@ -328,6 +333,7 @@ export function smokeMarketplace({ adapter, artifact, sha, staged, update }) {
       execute("tar", ["-xf", validatedPredecessorArchive, "-C", predecessorDirectory]);
     }
     adapter.runNativeSmoke({
+      adapterEvidence,
       candidateDirectory,
       execute,
       predecessorDirectory,

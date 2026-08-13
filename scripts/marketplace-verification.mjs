@@ -2,6 +2,7 @@
 
 import { resolve } from "node:path";
 import { claudeAdapter } from "./marketplace-verification/claude.mjs";
+import { codexAdapter } from "./marketplace-verification/codex.mjs";
 import {
   MarketplaceVerificationError,
 } from "./marketplace-verification/staged-marketplace.mjs";
@@ -50,9 +51,7 @@ function parseOptions(command, arguments_) {
 
 function selectAdapter(artifact) {
   if (artifact === "claude") return claudeAdapter;
-  if (artifact === "codex") {
-    throw new MarketplaceVerificationError("the Codex marketplace adapter is not available");
-  }
+  if (artifact === "codex") return codexAdapter;
   throw new MarketplaceVerificationError("unknown artifact; expected claude or codex");
 }
 
