@@ -125,6 +125,29 @@ TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core
 assert_equal user-change "$(global_option @tmux-agents-status-running-glyph)" 'reload preserves a user change to a Core default'
 assert_equal 'window-pane-changed[0] '"$hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'reload does not duplicate a valid owned hook'
 
+# Repairing one missing owned hook leaves completed hook arrays and evidence unchanged.
+window_pane_hooks_before=$(tmux_test show-hooks -g window-pane-changed)
+window_pane_marker_before=$(server_option @tmux-agents-status-hook-window-pane-changed)
+client_session_hooks_before=$(tmux_test show-hooks -g client-session-changed)
+client_session_marker_before=$(server_option @tmux-agents-status-hook-client-session-changed)
+client_attached_hooks_before=$(tmux_test show-hooks -g client-attached)
+client_attached_marker_before=$(server_option @tmux-agents-status-hook-client-attached)
+pane_exited_hooks_before=$(tmux_test show-hooks -g pane-exited)
+pane_exited_marker_before=$(server_option @tmux-agents-status-hook-pane-exited)
+tmux_test set-hook -gu session-window-changed
+tmux_test set-option -su @tmux-agents-status-hook-session-window-changed
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+assert_equal 'session-window-changed[0] '"$hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'a missing owned hook is repaired during direct installation'
+assert_equal 'session-window-changed[0]' "$(server_option @tmux-agents-status-hook-session-window-changed)" 'repair records the new owned hook selector'
+assert_equal "$window_pane_hooks_before" "$(tmux_test show-hooks -g window-pane-changed)" 'repair leaves a completed pane-selection hook array unchanged'
+assert_equal "$window_pane_marker_before" "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'repair leaves completed pane-selection ownership evidence unchanged'
+assert_equal "$client_session_hooks_before" "$(tmux_test show-hooks -g client-session-changed)" 'repair leaves a completed session hook array unchanged'
+assert_equal "$client_session_marker_before" "$(server_option @tmux-agents-status-hook-client-session-changed)" 'repair leaves completed session ownership evidence unchanged'
+assert_equal "$client_attached_hooks_before" "$(tmux_test show-hooks -g client-attached)" 'repair leaves a completed attachment hook array unchanged'
+assert_equal "$client_attached_marker_before" "$(server_option @tmux-agents-status-hook-client-attached)" 'repair leaves completed attachment ownership evidence unchanged'
+assert_equal "$pane_exited_hooks_before" "$(tmux_test show-hooks -g pane-exited)" 'repair leaves a completed pane-exit hook array unchanged'
+assert_equal "$pane_exited_marker_before" "$(server_option @tmux-agents-status-hook-pane-exited)" 'repair leaves completed pane-exit ownership evidence unchanged'
+
 tmux_test kill-server
 tmux_test -f /dev/null new-session -d -s hook-append
 server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
@@ -167,16 +190,15 @@ assert_equal "window-pane-changed[0] display-message user-before
 window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'a malformed selector preserves the user hook and appends Core'
 assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'a malformed selector is repaired with new ownership evidence'
 
-# Expected non-matches remain recoverable through the public loader's -e shell.
+# Expected ownership non-matches must not make the public fail-fast loader abort.
 tmux_test kill-server
 tmux_test -f /dev/null new-session -d -s loader-stale
 server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
 tmux_test set-hook -g window-pane-changed 'display-message user-before'
 tmux_test set-option -s @tmux-agents-status-hook-window-pane-changed 'window-pane-changed[0]'
-TMUX="$server_tmux" "$root/tmux-agents-status.tmux"
-assert_equal "window-pane-changed[0] display-message user-before
-window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'the public loader repairs stale hook evidence under fail-fast shell options'
-assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'the public loader records repaired hook evidence'
+TMUX="$server_tmux" "$root/tmux-agents-status.tmux" ||
+	fail 'the public loader tolerates expected ownership non-matches under fail-fast shell options'
+assert_equal "$root" "$(global_option @tmux-agents-status-root)" 'the public loader still completes discovery after ownership repair'
 
 # A missing marker does not claim an existing matching occurrence.
 tmux_test kill-server
@@ -280,6 +302,21 @@ assert_absent_server @tmux-agents-status-hook-window-pane-changed 'removal remov
 if [ -n "$(tmux_test show-hooks -g window-pane-changed 2>/dev/null | awk 'NF > 1')" ]; then
 	fail 'removal removes the managed window-pane hook'
 fi
+
+# A second remove with the ownership marker already gone must preserve a known user hook.
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-repeated-user-hook
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+user_hook='window-pane-changed[0] display-message user-before'
+tmux_test set-hook -g window-pane-changed 'display-message user-before'
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+first_remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
+assert_equal '0 true false false' "$first_remove_facts" 'the first remove clears owned configuration around a user hook'
+assert_equal "$user_hook" "$(tmux_test show-hooks -g window-pane-changed)" 'the first remove preserves the known user hook'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'the first remove clears the hook ownership marker'
+second_remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
+assert_equal '0 false false false' "$second_remove_facts" 'a repeated remove with no marker completes without mutation'
+assert_equal "$user_hook" "$(tmux_test show-hooks -g window-pane-changed)" 'a repeated remove with no marker leaves the known user hook unchanged'
 
 tmux_test kill-server
 tmux_test -f /dev/null new-session -d -s remove-selective

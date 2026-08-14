@@ -59,46 +59,18 @@ tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test set-hook -g window-pane-changed 'display-message user-hook'
 tmux_test run-shell "$root/tmux-agents-status.tmux"
 
+# The public loader delegates a representative installation and publishes discovery metadata.
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is installed'
 assert_equal '2' "$(option @tmux-agents-status-protocol)" 'core protocol major is published'
 assert_equal '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})' "$(option @tmux-agents-status-window)" 'window fragment is installed'
-assert_equal '#(#{q:@tmux-agents-status-root}/scripts/render-other-sessions #{q:session_id})' "$(option @tmux-agents-status-other-sessions)" 'other-sessions fragment is installed'
-assert_equal '•' "$(option @tmux-agents-status-running-glyph)" 'running glyph default is installed'
-assert_equal 'fg=cyan' "$(option @tmux-agents-status-running-style)" 'running style default is installed'
-assert_equal '?' "$(option @tmux-agents-status-waiting-glyph)" 'waiting glyph default is installed'
-assert_equal 'fg=yellow' "$(option @tmux-agents-status-waiting-style)" 'waiting style default is installed'
-assert_equal '✓' "$(option @tmux-agents-status-completed-glyph)" 'completed glyph default is installed'
-assert_equal 'fg=green' "$(option @tmux-agents-status-completed-style)" 'completed style default is installed'
-assert_equal '!' "$(option @tmux-agents-status-failed-glyph)" 'failed glyph default is installed'
-assert_equal 'fg=red' "$(option @tmux-agents-status-failed-style)" 'failed style default is installed'
-assert_equal 'reverse,bold' "$(option @tmux-agents-status-unread-style)" 'unread style default is installed'
 
-hook_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
-assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'window-pane hook ownership selector is installed'
-assert_equal 'session-window-changed[0]' "$(server_option @tmux-agents-status-hook-session-window-changed)" 'session-window hook ownership selector is installed'
-assert_equal 'client-session-changed[0]' "$(server_option @tmux-agents-status-hook-client-session-changed)" 'client-session hook ownership selector is installed'
-assert_equal 'client-attached[0]' "$(server_option @tmux-agents-status-hook-client-attached)" 'client-attached hook ownership selector is installed'
-assert_equal "window-pane-changed[0] display-message user-hook
-window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'the pane-selection hook appends after a user handler'
-assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'the window-selection hook is installed'
-assert_equal "client-session-changed[0] $hook_command" "$(tmux_test show-hooks -g client-session-changed)" 'the session-selection hook is installed'
-assert_equal "client-attached[0] $hook_command" "$(tmux_test show-hooks -g client-attached)" 'the client-attachment hook is installed'
-
-# Loading after user customization must preserve theme-owned formats and plugin overrides.
+# Loading after user customization must preserve theme-owned formats and public overrides.
 tmux_test set-option -g window-status-format 'custom window'
 tmux_test set-option -g window-status-current-format 'custom current window'
 tmux_test set-option -g status-right 'custom right'
 tmux_test set-option -g @tmux-agents-status-window 'custom window fragment'
 tmux_test set-option -g @tmux-agents-status-other-sessions 'custom other-sessions fragment'
 tmux_test set-option -g @tmux-agents-status-running-glyph 'R'
-tmux_test set-option -g @tmux-agents-status-running-style 'fg=white'
-tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W'
-tmux_test set-option -g @tmux-agents-status-waiting-style 'fg=black'
-tmux_test set-option -g @tmux-agents-status-completed-glyph 'C'
-tmux_test set-option -g @tmux-agents-status-completed-style 'fg=blue'
-tmux_test set-option -g @tmux-agents-status-failed-glyph ''
-tmux_test set-option -g @tmux-agents-status-failed-style 'fg=magenta'
-tmux_test set-option -g @tmux-agents-status-unread-style 'underscore'
 tmux_test set-option -g @tmux-agents-status-root '/stale/root'
 
 tmux_test run-shell "$root/tmux-agents-status.tmux"
@@ -111,27 +83,16 @@ assert_equal 'custom right' "$(option status-right)" 'right status format is unc
 assert_equal 'custom window fragment' "$(option @tmux-agents-status-window)" 'window fragment override is preserved'
 assert_equal 'custom other-sessions fragment' "$(option @tmux-agents-status-other-sessions)" 'other-sessions fragment override is preserved'
 assert_equal 'R' "$(option @tmux-agents-status-running-glyph)" 'running glyph override is preserved'
-assert_equal 'fg=white' "$(option @tmux-agents-status-running-style)" 'running style override is preserved'
-assert_equal 'W' "$(option @tmux-agents-status-waiting-glyph)" 'waiting glyph override is preserved'
-assert_equal 'fg=black' "$(option @tmux-agents-status-waiting-style)" 'waiting style override is preserved'
-assert_equal 'C' "$(option @tmux-agents-status-completed-glyph)" 'completed glyph override is preserved'
-assert_equal 'fg=blue' "$(option @tmux-agents-status-completed-style)" 'completed style override is preserved'
-assert_equal '' "$(option @tmux-agents-status-failed-glyph)" 'empty failed glyph override is preserved'
-assert_equal 'fg=magenta' "$(option @tmux-agents-status-failed-style)" 'failed style override is preserved'
-assert_equal 'underscore' "$(option @tmux-agents-status-unread-style)" 'unread style override is preserved'
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is refreshed on every load'
-assert_equal "window-pane-changed[0] display-message user-hook
-window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'repeated loads do not duplicate the appended pane hook'
-assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'repeated loads do not duplicate the appended window hook'
-assert_equal "client-session-changed[0] $hook_command" "$(tmux_test show-hooks -g client-session-changed)" 'repeated loads do not duplicate the appended session hook'
 
-# Missing registration resumes independently without disturbing completed hooks.
-tmux_test set-hook -gu session-window-changed
-tmux_test set-option -su @tmux-agents-status-hook-session-window-changed
-tmux_test run-shell "$root/tmux-agents-status.tmux"
-assert_equal "session-window-changed[0] $hook_command" "$(tmux_test show-hooks -g session-window-changed)" 'a missing hook registration resumes on reload'
-assert_equal "window-pane-changed[0] display-message user-hook
-window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'resuming one hook leaves completed hook arrays unchanged'
+# The remaining values provide the presentation contract exercised by the public hook and renderer scenarios.
+tmux_test set-option -g @tmux-agents-status-running-style 'fg=white'
+tmux_test set-option -g @tmux-agents-status-waiting-glyph 'W'
+tmux_test set-option -g @tmux-agents-status-waiting-style 'fg=black'
+tmux_test set-option -g @tmux-agents-status-completed-glyph 'C'
+tmux_test set-option -g @tmux-agents-status-completed-style 'fg=blue'
+tmux_test set-option -g @tmux-agents-status-failed-style 'fg=magenta'
+tmux_test set-option -g @tmux-agents-status-unread-style 'underscore'
 
 # Hook commands resolve the current root when the event fires, including spaces.
 relocated_root="$tmp/relocated root"

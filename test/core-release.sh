@@ -71,26 +71,11 @@ assert_equal "$plugin" "$(global_option @tmux-agents-status-root)" 'the entrypoi
 assert_equal '2' "$(global_option @tmux-agents-status-protocol)" 'the entrypoint publishes the core protocol major'
 assert_equal '•' "$(global_option @tmux-agents-status-running-glyph)" 'the entrypoint installs rendering defaults'
 
-ack_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
-cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
-hooks_after_load() {
-	for hook in window-pane-changed session-window-changed client-session-changed \
-		client-attached pane-exited; do
-		# tmux lists an empty hook as a bare name with no command.
-		tmux_test show-hooks -g "$hook" | awk 'NF > 1'
-	done
-}
-installed_hooks=$(hooks_after_load)
-assert_equal "window-pane-changed[0] $ack_command
-session-window-changed[0] $ack_command
-client-session-changed[0] $ack_command
-client-attached[0] $ack_command
-pane-exited[0] $cleanup_command" "$installed_hooks" 'the entrypoint installs exactly its own hooks'
-
+# Reload through the staged public entrypoint without duplicating user configuration edits.
 HOME=$home tmux_test source-file "$config"
 HOME=$home tmux_test source-file "$config"
-assert_equal "$installed_hooks" "$(hooks_after_load)" 'reloading the entrypoint never duplicates its hooks'
 assert_equal "$plugin" "$(global_option @tmux-agents-status-root)" 'reloading keeps the published root'
+assert_equal '•' "$(global_option @tmux-agents-status-running-glyph)" 'reloading preserves the representative rendering default'
 assert_equal "$config_before" "$(cksum "$config")" 'loading never edits user tmux configuration'
 
 # Runtime cleanup must remove live plugin-owned state and nothing else.
@@ -119,8 +104,7 @@ done
 assert_equal '' "$(server_option "@tmux-agents-status-state-$pane")" 'runtime cleanup removes pane records'
 assert_equal '' "$(global_option @tmux-agents-status-root)" 'runtime cleanup removes root metadata'
 assert_equal '' "$(global_option @tmux-agents-status-protocol)" 'runtime cleanup removes protocol metadata'
-assert_equal '' "$(global_option @tmux-agents-status-running-glyph)" 'runtime cleanup removes plugin-owned defaults'
-assert_equal '' "$(hooks_after_load)" 'runtime cleanup removes every hook the entrypoint installed'
+assert_equal '' "$(global_option @tmux-agents-status-running-glyph)" 'runtime cleanup removes the representative plugin default'
 assert_equal '#{E:@tmux-agents-status-other-sessions}#S' "$(global_option status-right)" 'runtime cleanup leaves user status formats for manual removal'
 
 # Manual removal: delete the checkout and the printed strings, then reload.

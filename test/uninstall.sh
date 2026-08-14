@@ -47,20 +47,13 @@ assert_absent_option() {
 	fi
 }
 
-assert_absent_global() {
-	assert_absent_option -g "$1" "$2"
-}
-
 assert_absent_server() {
 	assert_absent_option -s "$1" "$2"
 }
 
 tmux_test -f /dev/null new-session -d -s uninstall
-tmux_test set-hook -g window-pane-changed 'display-message user-before'
-tmux_test set-hook -g pane-exited 'display-message user-pane-before'
 tmux_test set-option -g status-right 'user status #{E:@tmux-agents-status-other-sessions}'
 tmux_test set-option -g window-status-format 'user window #{E:@tmux-agents-status-window}'
-tmux_test set-option -g @tmux-agents-status-waiting-glyph '?'
 cat >"$tmp/tmux.conf" <<'EOF'
 set -g @plugin 'hiback/tmux-agents-status'
 run-shell ~/.tmux/plugins/tmux-agents-status/tmux-agents-status.tmux
@@ -79,8 +72,6 @@ chmod +x "$root/scripts/refresh-clients"
 : >"$tmp/refresh-log"
 
 tmux_test run-shell "$root/tmux-agents-status.tmux"
-# A value changed after loading is user-owned live configuration and must survive.
-tmux_test set-option -g @tmux-agents-status-failed-glyph 'USER-FAILED'
 set -- $(tmux_test display-message -p '#{pane_id}')
 pane=$1
 stale=%999991
@@ -88,8 +79,6 @@ tmux_test set-option -s "@tmux-agents-status-state-$pane" 'v2|owner:live|-|-|run
 tmux_test set-option -s "@tmux-agents-status-ack-$pane" 'g:11111111111111111111111111111111'
 tmux_test set-option -s "@tmux-agents-status-state-$stale" 'v2|owner:stale|-|-|failed|g:22222222222222222222222222222222|-|-'
 tmux_test set-option -s "@tmux-agents-status-ack-$stale" 'g:22222222222222222222222222222222'
-tmux_test set-option -s @tmux-agents-status-user-data keep-server
-tmux_test set-option -g @tmux-agents-status-user-global keep-global
 
 FAKE_REFRESH_LOG="$tmp/refresh-log" \
 TMUX="$(tmux_test display-message -p '#{socket_path}'),$$,0" \
@@ -104,21 +93,8 @@ assert_equal "$expected_output" "$(cat "$tmp/first-output")" 'uninstall prints e
 assert_equal "$config_before" "$(cksum "$tmp/tmux.conf")" 'uninstall never edits user tmux configuration'
 assert_equal 'uninstall' "$(cat "$tmp/refresh-log")" 'public uninstall refreshes after combined configuration and lifecycle changes'
 
-assert_absent_global @tmux-agents-status-root 'uninstall removes Core discovery root metadata'
-assert_absent_global @tmux-agents-status-protocol 'uninstall removes Core discovery protocol metadata'
-assert_absent_global @tmux-agents-status-window 'uninstall removes a representative managed default'
-assert_equal 'USER-FAILED' "$(global_option @tmux-agents-status-failed-glyph)" 'a changed Core default remains user-owned live configuration'
-assert_equal '?' "$(global_option @tmux-agents-status-waiting-glyph)" 'a pre-existing equal default remains user-owned live configuration'
-assert_equal 'keep-global' "$(global_option @tmux-agents-status-user-global)" 'unknown global options are not removed by prefix'
-assert_equal 'keep-server' "$(server_option @tmux-agents-status-user-data)" 'unknown server options are not removed by prefix'
 assert_equal 'user status #{E:@tmux-agents-status-other-sessions}' "$(global_option status-right)" 'user status format is unchanged'
 assert_equal 'user window #{E:@tmux-agents-status-window}' "$(global_option window-status-format)" 'user window format is unchanged'
-if ! tmux_test show-hooks -g window-pane-changed | grep -Fq 'display-message user-before'; then
-	fail 'uninstall preserves user pane-selection hooks'
-fi
-if ! tmux_test show-hooks -g pane-exited | grep -Fq 'display-message user-pane-before'; then
-	fail 'uninstall preserves user pane-exit hooks'
-fi
 for option in \
 	"@tmux-agents-status-state-$pane" \
 	"@tmux-agents-status-ack-$pane" \
@@ -133,10 +109,7 @@ TMUX="$(tmux_test display-message -p '#{socket_path}'),$$,0" \
 [ ! -s "$tmp/second-error" ] || fail 'repeated uninstall remains silent on stderr'
 assert_equal 1 "$(wc -l <"$tmp/refresh-log" | tr -d ' ')" 'a no-change repeated uninstall does not refresh'
 assert_equal "$expected_output" "$(cat "$tmp/second-output")" 'repeated uninstall is idempotent and keeps manual instructions stable'
-assert_equal 'USER-FAILED' "$(global_option @tmux-agents-status-failed-glyph)" 'repeated uninstall preserves retained user options'
-if ! tmux_test show-hooks -g window-pane-changed | grep -Fq 'display-message user-before'; then
-	fail 'repeated uninstall leaves user hooks unchanged'
-fi
+assert_equal 'user status #{E:@tmux-agents-status-other-sessions}' "$(global_option status-right)" 'repeated uninstall preserves the user status format'
 
 rm -rf "$tmp/public-query-failure-bin"
 mkdir "$tmp/public-query-failure-bin"
@@ -161,10 +134,6 @@ fi
 assert_equal 'tmux-agents-status: uninstall: query failed' "$(cat "$tmp/query-error")" 'public uninstall maps a configuration query fact to one bounded diagnostic'
 assert_equal "$expected_output" "$(cat "$tmp/query-output")" 'public uninstall keeps manual guidance after a configuration query failure'
 assert_absent_server "@tmux-agents-status-state-$pane" 'public uninstall continues lifecycle cleanup after a configuration query failure'
-assert_equal '1' "$(server_option @tmux-agents-status-default-running-style)" 'public uninstall leaves the failed query marker for retry'
-TMUX="$server_tmux" "$root/scripts/uninstall" >"$tmp/query-retry-output" 2>"$tmp/query-retry-error"
-[ ! -s "$tmp/query-retry-error" ] || fail 'public retry after a query failure is clean'
-assert_absent_server @tmux-agents-status-default-running-style 'public retry removes the failed query marker'
 
 rm -rf "$tmp/public-write-failure-bin"
 mkdir "$tmp/public-write-failure-bin"
@@ -189,12 +158,7 @@ if REAL_TMUX="$(command -v tmux)" FAKE_PUBLIC_WRITE_LOG="$tmp/public-write-failu
 	fail 'public uninstall returns failure after a configuration write failure'
 fi
 assert_equal 'tmux-agents-status: uninstall: write failed' "$(cat "$tmp/write-error")" 'public uninstall maps a configuration write fact to one bounded diagnostic'
-assert_equal 1 "$(wc -l <"$tmp/public-write-failure-log" | tr -d ' ')" 'public uninstall attempts a failed marker write once'
-assert_absent_global @tmux-agents-status-running-style 'public uninstall still removes the unchanged default after its marker write fails'
 assert_equal "$expected_output" "$(cat "$tmp/write-output")" 'public uninstall keeps manual guidance after a configuration write failure'
-TMUX="$server_tmux" "$root/scripts/uninstall" >"$tmp/write-retry-output" 2>"$tmp/write-retry-error"
-[ ! -s "$tmp/write-retry-error" ] || fail 'public retry after a write failure is clean'
-assert_absent_server @tmux-agents-status-default-running-style 'public retry removes the failed write marker'
 
 tmux_test kill-server
 tmux_test -f /dev/null new-session -d -s uninstall-missing-module

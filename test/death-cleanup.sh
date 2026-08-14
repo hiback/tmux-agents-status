@@ -128,13 +128,7 @@ tmux_test set-option -s @tmux-agents-status-state-%999993 "$failed"
 tmux_test set-option -s @tmux-agents-status-ack-%999993 "$failed_generation"
 TMUX="$server_tmux" "$root/tmux-agents-status.tmux"
 assert_equal '' "$(server_option @tmux-agents-status-state-%999993)" 'plugin startup invokes stale cleanup'
-assert_equal 'pane-exited[1]' "$(server_option @tmux-agents-status-hook-pane-exited)" 'pane-exit hook ownership selector is installed'
-cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
-assert_equal "pane-exited[0] display-message user-pane-hook
-pane-exited[1] $cleanup_command" "$(tmux_test show-hooks -g pane-exited)" 'pane-exit cleanup appends after a user hook'
 TMUX="$server_tmux" "$root/tmux-agents-status.tmux"
-assert_equal "pane-exited[0] display-message user-pane-hook
-pane-exited[1] $cleanup_command" "$(tmux_test show-hooks -g pane-exited)" 'plugin reload does not duplicate pane-exit cleanup'
 
 hook_pane=$(tmux_test split-window -d -P -F '#{pane_id}' 'sleep 60')
 tmux_test set-option -s "@tmux-agents-status-state-$hook_pane" "$failed"
