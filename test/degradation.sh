@@ -362,6 +362,6 @@ grep -q '<set-option><-su><@tmux-agents-status-state-%100><;><set-option><-su><@
 
 run_boundary 'tmux-agents-status: cleanup-stale: query failed' 'plugin continues after startup cleanup failure' \
 	env FAKE_MODE=plugin-cleanup-query "$root/tmux-agents-status.tmux"
-grep -q '<set-option><-goq><@tmux-agents-status-window>' "$tmp/calls" || fail 'startup cleanup failure does not prevent independent defaults loading'
+grep -q '<set-option><-go><@tmux-agents-status-window>' "$tmp/calls" || fail 'startup cleanup failure does not prevent independent defaults loading'
 
 printf 'ok - renderer and mutation failures degrade with safe diagnostics\n'

@@ -45,6 +45,7 @@ node "$root/test/claude-lifecycle.mjs"
 node "$root/test/codex-adapter.mjs"
 node "$root/test/codex-lifecycle.mjs"
 "$root/test/state-core.sh"
+"$root/test/core-configuration.sh"
 "$root/test/acknowledge.sh"
 "$root/test/client-attachment.sh"
 "$root/test/death-cleanup.sh"
@@ -227,7 +228,7 @@ tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$rapid_state"
 tmux_test set-option -su "@tmux-agents-status-ack-$visit_pane"
 tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-rapid-pane-checked'
 tmux_test select-pane -t "$visit_pane" \; select-pane -t "$away_pane" \; wait-for tas-rapid-pane-checked
-assert_equal "$away_pane" "$(tmux_test display-message -p -c "$control_client" '#{pane_id}')" 'programmatic select-away leaves the alert invisible at acknowledgement time'
+assert_equal "$away_pane" "$(tmux_test display-message -p -t "$control_client" '#{pane_id}')" 'programmatic select-away leaves the alert invisible at acknowledgement time'
 assert_equal '' "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'rapid invisible selection is not acknowledged'
 assert_equal "$rapid_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'rapid selection leaves actual state intact'
 assert_equal '#[push-default]#[default] #[fg=black,underscore]W#[default]#[default]#[pop-default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'rapid invisible selection remains unread'

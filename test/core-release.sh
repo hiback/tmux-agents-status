@@ -47,6 +47,8 @@ mkdir -p "$plugin"
 (cd "$root" && git ls-files -z | tar -cf - --null -T -) | tar -xf - -C "$plugin"
 
 [ -x "$plugin/tmux-agents-status.tmux" ] || fail 'the released entrypoint is executable'
+[ -r "$plugin/scripts/core-configuration" ] || fail 'the released source-only configuration module is readable'
+[ ! -x "$plugin/scripts/core-configuration" ] || fail 'the configuration module is not an executable entrypoint'
 for script in state-core acknowledge cleanup-pane cleanup-stale refresh-clients \
 	render-window render-other-sessions uninstall; do
 	[ -x "$plugin/scripts/$script" ] || fail "the released scripts/$script is executable"
