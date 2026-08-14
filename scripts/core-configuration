@@ -227,3 +227,163 @@ tas_install_core_configuration() {
 	tas_core_configuration_install_hooks || return 1
 	tas_core_configuration_install_defaults
 }
+
+tas_core_configuration_read_global_option_for_removal() {
+	tas_core_configuration_option=$1
+	if tas_core_configuration_option_value=$(tmux show-option -gv "$tas_core_configuration_option" 2>/dev/null && printf x); then
+		tas_core_configuration_option_value=${tas_core_configuration_option_value%x}
+		tas_core_configuration_option_value=${tas_core_configuration_option_value%"$tas_core_configuration_newline"}
+		return 0
+	fi
+	tas_core_configuration_options=$(tmux show-options -g 2>/dev/null && printf x) || return 2
+	tas_core_configuration_options=${tas_core_configuration_options%x}
+	if printf '%s\n' "$tas_core_configuration_options" | awk -v option="$tas_core_configuration_option" '
+		$1 == option { found = 1 }
+		END { exit !found }
+	' >/dev/null 2>&1; then
+		return 2
+	else
+		tas_core_configuration_status=$?
+	fi
+	[ "$tas_core_configuration_status" -eq 1 ] && return 1
+	return 2
+}
+
+tas_core_configuration_read_server_option_for_removal() {
+	tas_core_configuration_option=$1
+	if tas_core_configuration_option_value=$(tmux show-option -sv "$tas_core_configuration_option" 2>/dev/null && printf x); then
+		tas_core_configuration_option_value=${tas_core_configuration_option_value%x}
+		tas_core_configuration_option_value=${tas_core_configuration_option_value%"$tas_core_configuration_newline"}
+		return 0
+	fi
+	tas_core_configuration_options=$(tmux show-options -s 2>/dev/null && printf x) || return 2
+	tas_core_configuration_options=${tas_core_configuration_options%x}
+	if printf '%s\n' "$tas_core_configuration_options" | awk -v option="$tas_core_configuration_option" '
+		$1 == option { found = 1 }
+		END { exit !found }
+	' >/dev/null 2>&1; then
+		return 2
+	else
+		tas_core_configuration_status=$?
+	fi
+	[ "$tas_core_configuration_status" -eq 1 ] && return 1
+	return 2
+}
+
+tas_core_configuration_remove_known_global_option() {
+	if tmux set-option -gu "$1" >/dev/null 2>&1; then
+		tas_core_configuration_changed=true
+	else
+		tas_core_configuration_write_failed=true
+	fi
+}
+
+tas_core_configuration_remove_known_server_option() {
+	if tmux set-option -su "$1" >/dev/null 2>&1; then
+		tas_core_configuration_changed=true
+	else
+		tas_core_configuration_write_failed=true
+	fi
+}
+
+tas_core_configuration_remove_global_option() {
+	if tas_core_configuration_read_global_option_for_removal "$1"; then
+		tas_core_configuration_remove_known_global_option "$1"
+	else
+		tas_core_configuration_status=$?
+		[ "$tas_core_configuration_status" -eq 1 ] || tas_core_configuration_query_failed=true
+	fi
+}
+
+tas_core_configuration_remove_discovery_entry() {
+	tas_core_configuration_remove_global_option "$1"
+	return 0
+}
+
+tas_core_configuration_remove_hook_entry() {
+	tas_core_configuration_hook=$1
+	tas_core_configuration_command=$2
+	tas_core_configuration_marker=$(tas_core_configuration_hook_marker "$tas_core_configuration_hook")
+	if tas_core_configuration_read_server_option_for_removal "$tas_core_configuration_marker"; then
+		tas_core_configuration_status=0
+	else
+		tas_core_configuration_status=$?
+	fi
+	case $tas_core_configuration_status in
+	1) return 0 ;;
+	2) tas_core_configuration_query_failed=true; return 0 ;;
+	esac
+	tas_core_configuration_recorded_selector=$tas_core_configuration_option_value
+	tas_core_configuration_selector=
+	if [ "$tas_core_configuration_recorded_selector" = 1 ]; then
+		if tas_core_configuration_find_hook_selector "$tas_core_configuration_hook" "$tas_core_configuration_command"; then
+			tas_core_configuration_selector=$tas_core_configuration_selector
+		else
+			tas_core_configuration_status=$?
+			[ "$tas_core_configuration_status" -eq 2 ] && tas_core_configuration_query_failed=true
+		fi
+	elif tas_core_configuration_selector_is_numeric "$tas_core_configuration_recorded_selector" "$tas_core_configuration_hook"; then
+		tas_core_configuration_selector=$tas_core_configuration_recorded_selector
+	fi
+	if [ -n "$tas_core_configuration_selector" ]; then
+		if tas_core_configuration_hook_matches "$tas_core_configuration_hook" "$tas_core_configuration_selector" "$tas_core_configuration_command"; then
+			tmux set-hook -gu "$tas_core_configuration_selector" >/dev/null 2>&1 &&
+				tas_core_configuration_changed=true ||
+				tas_core_configuration_write_failed=true
+		else
+			tas_core_configuration_status=$?
+			[ "$tas_core_configuration_status" -eq 2 ] && tas_core_configuration_query_failed=true
+		fi
+	fi
+	tas_core_configuration_remove_known_server_option "$tas_core_configuration_marker"
+	return 0
+}
+
+tas_core_configuration_remove_hooks() {
+	tas_core_configuration_enumerate_hooks tas_core_configuration_remove_hook_entry
+}
+
+tas_core_configuration_remove_default_entry() {
+	tas_core_configuration_managed_option=$1
+	tas_core_configuration_managed_default=$2
+	tas_core_configuration_marker=$(tas_core_configuration_default_marker "$tas_core_configuration_managed_option")
+	if tas_core_configuration_read_server_option_for_removal "$tas_core_configuration_marker"; then
+		tas_core_configuration_status=0
+	else
+		tas_core_configuration_status=$?
+	fi
+	case $tas_core_configuration_status in
+	1) return 0 ;;
+	2) tas_core_configuration_query_failed=true; return 0 ;;
+	esac
+	if tas_core_configuration_read_global_option_for_removal "$tas_core_configuration_managed_option"; then
+		if [ "$tas_core_configuration_option_value" = "$tas_core_configuration_managed_default" ]; then
+			tas_core_configuration_remove_known_global_option "$tas_core_configuration_managed_option"
+		fi
+	else
+		tas_core_configuration_status=$?
+		[ "$tas_core_configuration_status" -eq 1 ] || tas_core_configuration_query_failed=true
+	fi
+	tas_core_configuration_remove_known_server_option "$tas_core_configuration_marker"
+	return 0
+}
+
+tas_core_configuration_remove_defaults() {
+	tas_core_configuration_enumerate_defaults tas_core_configuration_remove_default_entry
+}
+
+tas_remove_core_configuration() {
+	tas_core_configuration_changed=false
+	tas_core_configuration_query_failed=false
+	tas_core_configuration_write_failed=false
+	[ "$#" -eq 0 ] || return 64
+	tas_core_configuration_root=${tas_core_configuration_root-}
+	tas_core_configuration_remove_hooks
+	tas_core_configuration_remove_defaults
+	tas_core_configuration_enumerate_discovery tas_core_configuration_remove_discovery_entry
+	if [ "$tas_core_configuration_query_failed" = true ] ||
+		[ "$tas_core_configuration_write_failed" = true ]; then
+		return 1
+	fi
+	return 0
+}

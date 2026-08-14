@@ -7,8 +7,6 @@ diagnosed_query=false
 diagnosed_parse=false
 diagnosed_write=false
 diagnosed_load=false
-newline='
-'
 
 diagnose() {
 	failed=true
@@ -43,23 +41,8 @@ has_option() {
 	' >/dev/null 2>&1
 }
 
-has_global_option() {
-	has_option -g "$1"
-}
-
 has_server_option() {
 	has_option -s "$1"
-}
-
-remove_global_option() {
-	option=$1
-	if has_global_option "$option"; then
-		if tmux set-option -gu "$option" >/dev/null 2>&1; then
-			changed=true
-		else
-			diagnose write
-		fi
-	fi
 }
 
 remove_server_option() {
@@ -73,89 +56,23 @@ remove_server_option() {
 	fi
 }
 
-remove_owned_default() {
-	option=$1
-	marker=$2
-	default=$3
-	if ! has_server_option "$marker"; then
-		return
-	fi
-	if has_global_option "$option"; then
-		value=$(tmux show-option -gqv "$option" 2>/dev/null && printf x) || {
-			diagnose query
-			remove_server_option "$marker"
-			return
-		}
-		value=${value%x}
-		value=${value%"$newline"}
-		if [ "$value" = "$default" ]; then
-			remove_global_option "$option"
-		fi
-	fi
-	remove_server_option "$marker"
-}
-
-find_hook_selector() {
-	hook=$1
-	command=$2
-	tmux show-hooks -g "$hook" 2>/dev/null | awk -v hook="$hook" -v command="$command" '
-		$1 ~ ("^" hook "\\[[0-9]+\\]$") {
-			candidate = $1
-			sub(/^[^[:space:]]+[[:space:]]+/, "")
-			if ($0 == command) {
-				number = candidate
-				sub("^" hook "\\[", "", number)
-				sub("\\]$", "", number)
-				if (!found || number > maximum) {
-					found = 1
-					maximum = number
-					selector = candidate
-				}
-			}
-		}
-		END { if (found) print selector }
-	'
-}
-
-remove_owned_hook() {
-	hook=$1
-	marker=$2
-	command=$3
-	if ! has_server_option "$marker"; then
-		return
-	fi
-	selector=$(tmux show-option -sqv "$marker" 2>/dev/null)
-	if [ "$selector" = 1 ]; then
-		# A legacy marker proves one matching occurrence is plugin-owned. Equal
-		# commands are interchangeable, so remove one and preserve all others.
-		selector=$(find_hook_selector "$hook" "$command")
-	fi
-	case $selector in
-	"$hook"\[[0-9]*\])
-		if tmux show-hooks -g "$hook" 2>/dev/null | awk -v selector="$selector" -v command="$command" '
-			$1 == selector {
-				sub(/^[^[:space:]]+[[:space:]]+/, "")
-				if ($0 == command) found = 1
-			}
-			END { exit !found }
-		'; then
-			if tmux set-hook -gu "$selector" >/dev/null 2>&1; then
-				changed=true
-			else
-				diagnose write
-			fi
-		fi
-		;;
-	esac
-	remove_server_option "$marker"
-}
-
-ack_command='run-shell "#{q:@tmux-agents-status-root}/scripts/acknowledge #{q:pane_id}"'
-for hook in window-pane-changed session-window-changed client-session-changed client-attached; do
-	remove_owned_hook "$hook" "@tmux-agents-status-hook-$hook" "$ack_command"
-done
-cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
-remove_owned_hook pane-exited @tmux-agents-status-hook-pane-exited "$cleanup_command"
+root=$(CDPATH= cd "$(dirname "$0" 2>/dev/null)" && pwd -P) || root=
+configuration_loaded=false
+if [ -n "$root" ] && [ -r "$root/core-configuration" ] &&
+	. "$root/core-configuration" 2>/dev/null &&
+	command -v tas_remove_core_configuration >/dev/null 2>&1; then
+	configuration_loaded=true
+else
+	diagnose load
+fi
+if [ "$configuration_loaded" = true ]; then
+	tas_core_configuration_remove_status=0
+	tas_remove_core_configuration || tas_core_configuration_remove_status=$?
+	[ "$tas_core_configuration_remove_status" -eq 64 ] && diagnose load
+	[ "$tas_core_configuration_query_failed" = true ] && diagnose query
+	[ "$tas_core_configuration_write_failed" = true ] && diagnose write
+	[ "$tas_core_configuration_changed" = true ] && changed=true
+fi
 
 options=$(tmux show-options -s 2>/dev/null && printf x) || {
 	diagnose query
@@ -175,32 +92,7 @@ done <<EOF
 $record_options
 EOF
 
-for marker in \
-	@tmux-agents-status-hook-window-pane-changed \
-	@tmux-agents-status-hook-session-window-changed \
-	@tmux-agents-status-hook-client-session-changed \
-	@tmux-agents-status-hook-client-attached \
-	@tmux-agents-status-hook-pane-exited; do
-	remove_server_option "$marker"
-done
-
-remove_owned_default @tmux-agents-status-window @tmux-agents-status-default-window '#(#{q:@tmux-agents-status-root}/scripts/render-window #{q:session_id} #{q:window_id} #{q:pane_id})'
-remove_owned_default @tmux-agents-status-other-sessions @tmux-agents-status-default-other-sessions '#(#{q:@tmux-agents-status-root}/scripts/render-other-sessions #{q:session_id})'
-remove_owned_default @tmux-agents-status-running-glyph @tmux-agents-status-default-running-glyph '•'
-remove_owned_default @tmux-agents-status-running-style @tmux-agents-status-default-running-style 'fg=cyan'
-remove_owned_default @tmux-agents-status-waiting-glyph @tmux-agents-status-default-waiting-glyph '?'
-remove_owned_default @tmux-agents-status-waiting-style @tmux-agents-status-default-waiting-style 'fg=yellow'
-remove_owned_default @tmux-agents-status-completed-glyph @tmux-agents-status-default-completed-glyph '✓'
-remove_owned_default @tmux-agents-status-completed-style @tmux-agents-status-default-completed-style 'fg=green'
-remove_owned_default @tmux-agents-status-failed-glyph @tmux-agents-status-default-failed-glyph '!'
-remove_owned_default @tmux-agents-status-failed-style @tmux-agents-status-default-failed-style 'fg=red'
-remove_owned_default @tmux-agents-status-unread-style @tmux-agents-status-default-unread-style 'reverse,bold'
-
-remove_global_option @tmux-agents-status-root
-remove_global_option @tmux-agents-status-protocol
-
 if [ "$changed" = true ]; then
-	root=$(CDPATH= cd "$(dirname "$0" 2>/dev/null)" && pwd -P) || root=
 	if [ -n "$root" ]; then
 		"$root/refresh-clients" uninstall
 	else
