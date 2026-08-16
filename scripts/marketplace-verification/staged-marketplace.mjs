@@ -100,8 +100,8 @@ function requireAbsentOutput(output) {
 
 function publishOutput(source, destination) {
   try {
-    // Reserve the absent name so rename can replace only this invocation's empty directory.
-    mkdirSync(destination, { mode: 0o000 });
+    // Reserve the absent name while keeping it writable for Darwin directory replacement.
+    mkdirSync(destination, { mode: 0o700 });
   } catch {
     throw new MarketplaceVerificationError("--output must remain absent until staging completes");
   }
