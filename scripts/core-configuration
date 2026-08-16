@@ -125,9 +125,11 @@ tas_core_configuration_hook_matches() {
 tas_core_configuration_find_hook_selector() {
 	tas_core_configuration_hook=$1
 	tas_core_configuration_command=$2
+	tas_core_configuration_selector=
+	tas_core_configuration_selector_candidate=
 	tas_core_configuration_hooks=$(tmux show-hooks -g "$tas_core_configuration_hook" 2>/dev/null && printf x) || return 2
 	tas_core_configuration_hooks=${tas_core_configuration_hooks%x}
-	tas_core_configuration_selector=$(printf '%s\n' "$tas_core_configuration_hooks" | awk -v hook="$tas_core_configuration_hook" -v command="$tas_core_configuration_command" '
+	if tas_core_configuration_selector_candidate=$(printf '%s\n' "$tas_core_configuration_hooks" | awk -v hook="$tas_core_configuration_hook" -v command="$tas_core_configuration_command" '
 		$1 ~ ("^" hook "\\[[0-9]+\\]$") {
 			candidate = $1
 			sub(/^[^[:space:]]+[[:space:]]+/, "")
@@ -144,30 +146,61 @@ tas_core_configuration_find_hook_selector() {
 			}
 		}
 		END { if (found) print selector }
-	') || return 2
+	' 2>/dev/null); then
+		tas_core_configuration_selector=$tas_core_configuration_selector_candidate
+	else
+		tas_core_configuration_selector_candidate=
+		return 2
+	fi
 	[ -n "$tas_core_configuration_selector" ]
 }
 
-tas_core_configuration_read_server_option() {
-	tas_core_configuration_option=$1
-	if tas_core_configuration_option_value=$(tmux show-option -sqv "$tas_core_configuration_option" 2>/dev/null && printf x); then
-		tas_core_configuration_option_value=${tas_core_configuration_option_value%x}
-		tas_core_configuration_option_value=${tas_core_configuration_option_value%"$tas_core_configuration_newline"}
-		return 0
-	fi
-	tas_core_configuration_options=$(tmux show-options -s 2>/dev/null && printf x) || return 2
-	tas_core_configuration_options=${tas_core_configuration_options%x}
-	if printf '%s\n' "$tas_core_configuration_options" | awk -v option="$tas_core_configuration_option" '
+tas_core_configuration_option_is_listed() {
+	tas_core_configuration_list_scope=$1
+	tas_core_configuration_listed_option=$2
+	tas_core_configuration_options=$(tmux show-options "$tas_core_configuration_list_scope" 2>/dev/null) || return 2
+	if printf '%s\n' "$tas_core_configuration_options" | awk -v option="$tas_core_configuration_listed_option" '
 		$1 == option { found = 1 }
 		END { exit !found }
 	' >/dev/null 2>&1; then
+		return 0
+	else
+		tas_core_configuration_status=$?
+	fi
+	[ "$tas_core_configuration_status" -eq 1 ] && return 1
+	return 2
+}
+
+tas_core_configuration_read_option() {
+	tas_core_configuration_scope=$1
+	tas_core_configuration_flags=$2
+	tas_core_configuration_option=$3
+	tas_core_configuration_option_value=
+	if tas_core_configuration_option_value=$(tmux show-option "${tas_core_configuration_scope}${tas_core_configuration_flags}" "$tas_core_configuration_option" 2>/dev/null && printf x); then
+		tas_core_configuration_option_value=${tas_core_configuration_option_value%x}
+		tas_core_configuration_option_value=${tas_core_configuration_option_value%"$tas_core_configuration_newline"}
+		if tas_core_configuration_option_is_listed "$tas_core_configuration_scope" "$tas_core_configuration_option"; then
+			return 0
+		else
+			tas_core_configuration_status=$?
+		fi
+		[ "$tas_core_configuration_status" -eq 1 ] && {
+			tas_core_configuration_option_value=
+			return 1
+		}
+		return 2
+	fi
+	if tas_core_configuration_option_is_listed "$tas_core_configuration_scope" "$tas_core_configuration_option"; then
 		return 2
 	else
 		tas_core_configuration_status=$?
 	fi
-	[ "$tas_core_configuration_status" -eq 1 ] || return 2
-	tas_core_configuration_option_value=
-	return 1
+	[ "$tas_core_configuration_status" -eq 1 ] && return 1
+	return 2
+}
+
+tas_core_configuration_read_server_option() {
+	tas_core_configuration_read_option -s qv "$1"
 }
 
 tas_core_configuration_install_hook_entry() {
@@ -229,45 +262,11 @@ tas_install_core_configuration() {
 }
 
 tas_core_configuration_read_global_option_for_removal() {
-	tas_core_configuration_option=$1
-	if tas_core_configuration_option_value=$(tmux show-option -gv "$tas_core_configuration_option" 2>/dev/null && printf x); then
-		tas_core_configuration_option_value=${tas_core_configuration_option_value%x}
-		tas_core_configuration_option_value=${tas_core_configuration_option_value%"$tas_core_configuration_newline"}
-		return 0
-	fi
-	tas_core_configuration_options=$(tmux show-options -g 2>/dev/null && printf x) || return 2
-	tas_core_configuration_options=${tas_core_configuration_options%x}
-	if printf '%s\n' "$tas_core_configuration_options" | awk -v option="$tas_core_configuration_option" '
-		$1 == option { found = 1 }
-		END { exit !found }
-	' >/dev/null 2>&1; then
-		return 2
-	else
-		tas_core_configuration_status=$?
-	fi
-	[ "$tas_core_configuration_status" -eq 1 ] && return 1
-	return 2
+	tas_core_configuration_read_option -g v "$1"
 }
 
 tas_core_configuration_read_server_option_for_removal() {
-	tas_core_configuration_option=$1
-	if tas_core_configuration_option_value=$(tmux show-option -sv "$tas_core_configuration_option" 2>/dev/null && printf x); then
-		tas_core_configuration_option_value=${tas_core_configuration_option_value%x}
-		tas_core_configuration_option_value=${tas_core_configuration_option_value%"$tas_core_configuration_newline"}
-		return 0
-	fi
-	tas_core_configuration_options=$(tmux show-options -s 2>/dev/null && printf x) || return 2
-	tas_core_configuration_options=${tas_core_configuration_options%x}
-	if printf '%s\n' "$tas_core_configuration_options" | awk -v option="$tas_core_configuration_option" '
-		$1 == option { found = 1 }
-		END { exit !found }
-	' >/dev/null 2>&1; then
-		return 2
-	else
-		tas_core_configuration_status=$?
-	fi
-	[ "$tas_core_configuration_status" -eq 1 ] && return 1
-	return 2
+	tas_core_configuration_read_option -s v "$1"
 }
 
 tas_core_configuration_remove_known_global_option() {

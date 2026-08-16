@@ -59,7 +59,8 @@ remove_server_option() {
 root=$(CDPATH= cd "$(dirname "$0" 2>/dev/null)" && pwd -P) || root=
 configuration_loaded=false
 if [ -n "$root" ] && [ -r "$root/core-configuration" ] &&
-	. "$root/core-configuration" 2>/dev/null &&
+	sh -n "$root/core-configuration" >/dev/null 2>&1 &&
+	. "$root/core-configuration" >/dev/null 2>&1 &&
 	command -v tas_remove_core_configuration >/dev/null 2>&1; then
 	configuration_loaded=true
 else

@@ -2,12 +2,22 @@
 set -eu
 
 root=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
-socket=tmux-agents-status-core-configuration-$$
+socket_prefix=tmux-agents-status-core-configuration-$$
+socket="$socket_prefix-0"
+sockets=$socket
+socket_index=0
 tmp=${TMPDIR:-/tmp}/tmux-agents-status-core-configuration-$$
 mkdir "$tmp"
+no_refresh_client_pid=
 
 cleanup() {
-	tmux -L "$socket" kill-server >/dev/null 2>&1 || :
+	if [ -n "$no_refresh_client_pid" ]; then
+		kill "$no_refresh_client_pid" >/dev/null 2>&1 || :
+		wait "$no_refresh_client_pid" 2>/dev/null || :
+	fi
+	for cleanup_socket in $sockets; do
+		tmux -L "$cleanup_socket" kill-server >/dev/null 2>&1 || :
+	done
 	rm -rf "$tmp"
 }
 trap cleanup 0
@@ -22,7 +32,16 @@ assert_equal() {
 	[ "$1" = "$2" ] || fail "$3 (expected '$1', got '$2')"
 }
 
+# A pane-exited run-shell can outlive kill-server. Never reuse its socket for
+# the next scenario, so the old callback cannot reach a newly created server.
 tmux_test() {
+	if [ "${1-}" = kill-server ]; then
+		tmux -L "$socket" "$@"
+		socket_index=$((socket_index + 1))
+		socket="$socket_prefix-$socket_index"
+		sockets="$sockets $socket"
+		return 0
+	fi
 	tmux -L "$socket" "$@"
 }
 
@@ -35,13 +54,15 @@ server_option() {
 }
 
 assert_absent_global() {
-	if tmux_test show-options -g "$1" >/dev/null 2>&1; then
+	options=$(tmux_test show-options -g 2>/dev/null) || fail "$2 (cannot inspect global options)"
+	if printf '%s\n' "$options" | awk -v option="$1" '$1 == option { found = 1 } END { exit !found }'; then
 		fail "$2"
 	fi
 }
 
 assert_absent_server() {
-	if tmux_test show-options -s "$1" >/dev/null 2>&1; then
+	options=$(tmux_test show-options -s 2>/dev/null) || fail "$2 (cannot inspect server options)"
+	if printf '%s\n' "$options" | awk -v option="$1" '$1 == option { found = 1 } END { exit !found }'; then
 		fail "$2"
 	fi
 }
@@ -78,6 +99,114 @@ done
 cleanup_command='run-shell "#{q:@tmux-agents-status-root}/scripts/cleanup-pane #{q:hook_pane}"'
 assert_equal 'pane-exited[0] '"$cleanup_command" "$(tmux_test show-hooks -g pane-exited)" 'installation installs the pane-exit cleanup hook'
 assert_equal 'pane-exited[0]' "$(server_option @tmux-agents-status-hook-pane-exited)" 'Core configuration ownership records the pane-exit hook selector'
+
+# Direct intents preserve their public mutation phase boundaries.
+rm -rf "$tmp/phase-order-bin"
+mkdir "$tmp/phase-order-bin"
+cat >"$tmp/phase-order-bin/tmux" <<'EOF'
+#!/bin/sh
+stage=
+case "$1:$2:$3" in
+set-option:-g:@tmux-agents-status-root|set-option:-g:@tmux-agents-status-protocol|set-option:-gu:@tmux-agents-status-root|set-option:-gu:@tmux-agents-status-protocol)
+	stage=discovery
+	;;
+set-hook:-ag:*|set-hook:-gu:*|set-option:-s:@tmux-agents-status-hook-*|set-option:-su:@tmux-agents-status-hook-*)
+	stage=hooks
+	;;
+set-option:-go:@tmux-agents-status-*|set-option:-gu:@tmux-agents-status-*|set-option:-s:@tmux-agents-status-default-*|set-option:-su:@tmux-agents-status-default-*)
+	stage=defaults
+	;;
+set-option:*|set-hook:*)
+	stage=unexpected
+	;;
+esac
+[ -z "$stage" ] || printf '%s %s %s %s %s\n' "${ORDER_MODE-}" "$stage" "$1" "$2" "$3" >>"$ORDER_TRACE"
+exec "$REAL_TMUX" "$@"
+EOF
+chmod +x "$tmp/phase-order-bin/tmux"
+assert_phase_order() {
+	phase_trace=$1
+	phase_mode=$2
+	phase_first=$3
+	phase_second=$4
+	phase_third=$5
+	phase_label=$6
+	if ! awk -v mode="$phase_mode" -v first="$phase_first" -v second="$phase_second" -v third="$phase_third" '
+		BEGIN {
+			rank[first] = 1
+			rank[second] = 2
+			rank[third] = 3
+			last = 0
+		}
+		$1 == mode {
+			if (!($2 in rank) || rank[$2] < last) {
+				bad = 1
+			} else {
+				last = rank[$2]
+			}
+			seen[$2] = 1
+		}
+		END {
+			if (bad || !seen[first] || !seen[second] || !seen[third]) exit 1
+		}
+	' "$phase_trace"; then
+		fail "$phase_label"
+	fi
+}
+real_tmux=$(command -v tmux)
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s direct-phase-order
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+: >"$tmp/phase-order-trace"
+if ! REAL_TMUX="$real_tmux" ORDER_MODE=install ORDER_TRACE="$tmp/phase-order-trace" PATH="$tmp/phase-order-bin:$PATH" \
+	TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"; then
+	fail 'direct installation phase-order scenario completes cleanly'
+fi
+assert_phase_order "$tmp/phase-order-trace" install discovery hooks defaults 'direct installation mutates discovery metadata before hooks before defaults'
+if ! REAL_TMUX="$real_tmux" ORDER_MODE=remove ORDER_TRACE="$tmp/phase-order-trace" PATH="$tmp/phase-order-bin:$PATH" \
+	TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_remove_core_configuration' sh "$root"; then
+	fail 'direct removal phase-order scenario completes cleanly'
+fi
+assert_phase_order "$tmp/phase-order-trace" remove hooks defaults discovery 'direct removal mutates hooks before defaults before discovery metadata'
+
+# Direct removal owns configuration only; a real tmux wrapper must observe no refresh.
+rm -rf "$tmp/no-refresh-bin"
+mkdir "$tmp/no-refresh-bin"
+cat >"$tmp/no-refresh-bin/tmux" <<'EOF'
+#!/bin/sh
+case " $* " in
+*" refresh-client "*)
+	printf '%s\n' refresh-client >>"$NO_REFRESH_TRACE"
+	;;
+esac
+exec "$REAL_TMUX" "$@"
+EOF
+chmod +x "$tmp/no-refresh-bin/tmux"
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s direct-no-refresh
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+
+# An actual attached control-mode client makes both direct refresh-client calls
+# and production refresh-helper calls observable through the delegating wrapper.
+tmux_test set-hook -ag client-attached 'wait-for -S tas-core-configuration-client-attached'
+no_refresh_fifo=$tmp/no-refresh-input
+mkfifo "$no_refresh_fifo"
+tmux -L "$socket" -C attach-session -t direct-no-refresh \
+	<"$no_refresh_fifo" >"$tmp/no-refresh-output" 2>"$tmp/no-refresh-error" &
+no_refresh_client_pid=$!
+exec 8>"$no_refresh_fifo"
+tmux_test wait-for tas-core-configuration-client-attached
+[ -n "$(tmux_test list-clients -F '#{client_name}')" ] || fail 'direct removal refresh guard has an attached client'
+
+: >"$tmp/no-refresh-trace"
+if ! REAL_TMUX="$real_tmux" NO_REFRESH_TRACE="$tmp/no-refresh-trace" PATH="$tmp/no-refresh-bin:$PATH" \
+	TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1" && tas_remove_core_configuration' sh "$root"; then
+	fail 'direct removal without a refresh completes cleanly'
+fi
+[ ! -s "$tmp/no-refresh-trace" ] || fail 'direct removal never invokes refresh directly or through the production helper'
+exec 8>&-
+wait "$no_refresh_client_pid" 2>/dev/null || :
+no_refresh_client_pid=
 
 # Simulate a user winning the set-if-absent race after tmux rejects Core's set.
 tmux_test kill-server
@@ -116,12 +245,38 @@ run_preexisting_case equal 'fg=cyan'
 run_preexisting_case custom 'user-style'
 run_preexisting_case empty ''
 
+# A missing marker must not authorize removal when tmux returns a successful
+# empty named read for an unknown option (tmux 3.1b behavior).
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-unmarked-values
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+tmux_test set-option -g @tmux-agents-status-running-style 'fg=cyan'
+tmux_test set-option -g @tmux-agents-status-waiting-style 'user-style'
+tmux_test set-option -g @tmux-agents-status-failed-style ''
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration' sh "$root"
+assert_equal 'fg=cyan' "$(global_option @tmux-agents-status-running-style)" 'an unmarked equal default remains user-owned during removal'
+assert_equal 'user-style' "$(global_option @tmux-agents-status-waiting-style)" 'an unmarked custom value remains user-owned during removal'
+assert_equal '' "$(global_option @tmux-agents-status-failed-style)" 'an unmarked empty value remains user-owned during removal'
+
+# An explicitly present empty marker remains distinct from a missing marker.
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-empty-marker
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+tmux_test set-option -g @tmux-agents-status-running-style 'fg=cyan'
+tmux_test set-option -s @tmux-agents-status-default-running-style ''
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration' sh "$root"
+assert_absent_global @tmux-agents-status-running-style 'an explicitly present empty marker authorizes removal of its unchanged default'
+
 tmux_test kill-server
 tmux_test -f /dev/null new-session -d -s reload
 server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
 TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
 tmux_test set-option -g @tmux-agents-status-running-glyph user-change
+tmux_test set-option -g @tmux-agents-status-root /stale/root
+tmux_test set-option -g @tmux-agents-status-protocol 99
 TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+assert_equal "$root" "$(global_option @tmux-agents-status-root)" 'reload refreshes the canonical checkout root'
+assert_equal '2' "$(global_option @tmux-agents-status-protocol)" 'reload refreshes the normalized protocol major'
 assert_equal user-change "$(global_option @tmux-agents-status-running-glyph)" 'reload preserves a user change to a Core default'
 assert_equal 'window-pane-changed[0] '"$hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'reload does not duplicate a valid owned hook'
 
@@ -156,6 +311,142 @@ TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core
 assert_equal "window-pane-changed[0] display-message user-before
 window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'installation appends after a user hook'
 assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'Core configuration ownership records the appended selector after a user hook'
+
+# Selector rediscovery may fail after a real append; the legacy fallback must be
+# recoverable by a later public intent without duplicating or losing the hook.
+tmux_test kill-server
+rm -rf "$tmp/rediscovery-bin"
+mkdir "$tmp/rediscovery-bin"
+cat >"$tmp/rediscovery-bin/tmux" <<'EOF'
+#!/bin/sh
+if [ "$1:$2:$3" = 'show-hooks:-g:window-pane-changed' ] && [ ! -e "$FAIL_REDISCOVERY_ONCE" ]; then
+	: >"$FAIL_REDISCOVERY_ONCE"
+	exit 1
+fi
+exec "$REAL_TMUX" "$@"
+EOF
+chmod +x "$tmp/rediscovery-bin/tmux"
+tmux_test -f /dev/null new-session -d -s hook-rediscovery-fallback
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+if ! REAL_TMUX="$real_tmux" FAIL_REDISCOVERY_ONCE="$tmp/rediscovery-once" PATH="$tmp/rediscovery-bin:$PATH" \
+	TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"; then
+	fail 'a selector rediscovery failure remains recoverable after a successful hook append'
+fi
+assert_equal "window-pane-changed[0] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'selector rediscovery fallback preserves the real appended hook'
+assert_equal 1 "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'selector rediscovery fallback records legacy ownership evidence'
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+assert_equal "window-pane-changed[0] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'a later load reconciles fallback evidence without duplicating the hook'
+assert_equal 'window-pane-changed[0]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'a later load migrates fallback evidence to the exact selector'
+remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
+assert_equal '0 true false false' "$remove_facts" 'removal coordinates with reconciled selector evidence'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'removal clears reconciled fallback evidence'
+if [ -n "$(tmux_test show-hooks -g window-pane-changed 2>/dev/null | awk 'NF > 1')" ]; then
+	fail 'removal clears the fallback-owned hook after reconciliation'
+fi
+
+# An operational selector parser failure remains a bounded direct-intent result.
+rm -rf "$tmp/awk-failure-bin"
+mkdir "$tmp/awk-failure-bin"
+real_awk=$(command -v awk)
+cat >"$tmp/awk-failure-bin/awk" <<'EOF'
+#!/bin/sh
+case "$*" in
+*maximum*)
+	printf '%s\n' 'injected awk operational failure' >&2
+	exit 2
+	;;
+*)
+	exec "$REAL_AWK" "$@"
+	;;
+esac
+EOF
+chmod +x "$tmp/awk-failure-bin/awk"
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-awk-failure
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+tmux_test set-hook -g window-pane-changed "$hook_command"
+tmux_test set-hook -ag window-pane-changed "$hook_command"
+tmux_test set-option -s @tmux-agents-status-hook-window-pane-changed 1
+if awk_failure_facts=$(REAL_AWK="$real_awk" PATH="$tmp/awk-failure-bin:$PATH" TMUX="$server_tmux" sh -c '
+. "$1/scripts/core-configuration" || exit 1
+tas_remove_core_configuration >"$2" 2>"$3"
+status=$?
+printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"
+exit "$status"
+' sh "$root" "$tmp/awk-failure-output" "$tmp/awk-failure-error"); then
+	fail 'a selector parser failure returns operational failure after best-effort traversal'
+fi
+assert_equal '1 true true false' "$awk_failure_facts" 'selector parser failure exposes only content-free removal facts'
+[ ! -s "$tmp/awk-failure-output" ] || fail 'selector parser failure writes no direct-intent stdout'
+[ ! -s "$tmp/awk-failure-error" ] || fail 'selector parser failure writes no direct-intent diagnostics'
+assert_equal "window-pane-changed[0] $hook_command
+window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'selector parser failure preserves uncertain identical hook occurrences'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'selector parser failure still removes its ownership marker'
+
+# A parser that publishes a selector before failing must not authorize hook removal.
+rm -rf "$tmp/awk-partial-bin"
+mkdir "$tmp/awk-partial-bin"
+real_awk=$(command -v awk)
+cat >"$tmp/awk-partial-bin/awk" <<'EOF'
+#!/bin/sh
+case ${5-} in
+*maximum*)
+	"$REAL_AWK" "$@"
+	printf '%s\n' 'raw partial selector parser failure' >&2
+	exit 2
+	;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$tmp/awk-partial-bin/awk"
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-awk-partial
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+tmux_test set-hook -g window-pane-changed "$hook_command"
+tmux_test set-hook -ag window-pane-changed "$hook_command"
+tmux_test set-option -s @tmux-agents-status-hook-window-pane-changed 1
+if partial_facts=$(REAL_TMUX="$real_tmux" REAL_AWK="$real_awk" PATH="$tmp/awk-partial-bin:$PATH" TMUX="$server_tmux" sh -c '
+. "$1/scripts/core-configuration" || exit 1
+tas_remove_core_configuration >"$2" 2>"$3"
+status=$?
+printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"
+exit "$status"
+' sh "$root" "$tmp/awk-partial-output" "$tmp/awk-partial-error"); then
+	fail 'a partial selector parser result returns operational failure after best-effort traversal'
+fi
+assert_equal '1 true true false' "$partial_facts" 'partial selector parser output exposes only content-free removal facts'
+[ ! -s "$tmp/awk-partial-output" ] || fail 'partial selector parser output does not leak direct-intent stdout'
+[ ! -s "$tmp/awk-partial-error" ] || fail 'partial selector parser output does not leak direct-intent diagnostics'
+assert_equal "window-pane-changed[0] $hook_command
+window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'partial selector parser output preserves every uncertain hook occurrence'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'partial selector parser output still removes only its ownership marker'
+
+# An append failure leaves user hooks and ownership evidence recoverable.
+rm -rf "$tmp/append-failure-bin"
+mkdir "$tmp/append-failure-bin"
+cat >"$tmp/append-failure-bin/tmux" <<'EOF'
+#!/bin/sh
+if [ "$1:$2:$3" = 'set-hook:-ag:window-pane-changed' ] && [ ! -e "$FAIL_APPEND_ONCE" ]; then
+	: >"$FAIL_APPEND_ONCE"
+	exit 1
+fi
+exec "$REAL_TMUX" "$@"
+EOF
+chmod +x "$tmp/append-failure-bin/tmux"
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s hook-append-failure
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+tmux_test set-hook -g window-pane-changed 'display-message user-before'
+if REAL_TMUX="$real_tmux" FAIL_APPEND_ONCE="$tmp/append-failure-once" PATH="$tmp/append-failure-bin:$PATH" \
+	TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"; then
+	fail 'a failed hook append aborts direct installation'
+fi
+assert_equal 'window-pane-changed[0] display-message user-before' "$(tmux_test show-hooks -g window-pane-changed)" 'a failed hook append preserves the user hook'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'a failed hook append does not claim exact ownership'
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+assert_equal "window-pane-changed[0] display-message user-before
+window-pane-changed[1] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'a later install recovers a failed hook append'
+assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'a recovered append records exact ownership evidence'
 
 # A stale exact selector is evidence about neither the user hook nor a new one.
 tmux_test kill-server
@@ -334,6 +625,7 @@ tmux_test set-hook -ag window-pane-changed 'display-message user-after'
 remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
 assert_equal '0 true false false' "$remove_facts" 'removal completes after processing selective ownership'
 assert_equal user-running "$(global_option @tmux-agents-status-running-glyph)" 'a changed owned default remains user-owned'
+assert_absent_server @tmux-agents-status-default-running-glyph 'a changed owned default loses its ownership marker'
 assert_equal '?' "$(global_option @tmux-agents-status-waiting-glyph)" 'an equal user-owned default remains after removal'
 assert_equal '' "$(global_option @tmux-agents-status-waiting-style)" 'an empty user-owned default remains after removal'
 assert_absent_global @tmux-agents-status-running-style 'an unchanged owned default is removed'
@@ -356,6 +648,14 @@ remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas
 assert_equal '0 true false false' "$remove_facts" 'a valid removal reports changed configuration after invalid use'
 remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
 assert_equal '0 false false false' "$remove_facts" 'a repeated removal resets changed and failure facts'
+
+# Discovery metadata is independently removable and counts as a mutation.
+tmux_test set-option -g @tmux-agents-status-root "$root"
+tmux_test set-option -g @tmux-agents-status-protocol 2
+discovery_only_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
+assert_equal '0 true false false' "$discovery_only_facts" 'discovery-only removal reports a clean mutation'
+assert_absent_global @tmux-agents-status-root 'discovery-only removal removes the root metadata'
+assert_absent_global @tmux-agents-status-protocol 'discovery-only removal removes the protocol metadata'
 
 rm -rf "$tmp/reset-bin"
 mkdir "$tmp/reset-bin"
@@ -446,6 +746,59 @@ assert_absent_global @tmux-agents-status-root 'discovery metadata is removed aft
 assert_equal '1' "$(server_option @tmux-agents-status-default-running-style)" 'a failed marker remains available for repeated uninstall'
 remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
 assert_equal '0 true false false' "$remove_facts" 'a repeated removal retries a failed write cleanly'
+
+# A failed hook-marker write is attempted once, while later catalog entries
+# still traverse; a later invocation is the retry path.
+rm -rf "$tmp/hook-write-failure-bin"
+mkdir "$tmp/hook-write-failure-bin"
+cat >"$tmp/hook-write-failure-bin/tmux" <<'EOF'
+#!/bin/sh
+case "$1:$2:$3" in
+set-option:-su:@tmux-agents-status-hook-window-pane-changed)
+	printf '%s\n' "$1 $2 $3" >>"$FAKE_HOOK_WRITE_LOG"
+	exit 1
+	;;
+esac
+exec "$REAL_TMUX" "$@"
+EOF
+chmod +x "$tmp/hook-write-failure-bin/tmux"
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-hook-write-failure
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+: >"$tmp/hook-write-failure-log"
+if remove_facts=$(REAL_TMUX="$real_tmux" FAKE_HOOK_WRITE_LOG="$tmp/hook-write-failure-log" PATH="$tmp/hook-write-failure-bin:$PATH" \
+	TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root"); then
+	fail 'a failed hook-marker write returns operational failure after traversal'
+fi
+assert_equal '1 true false true' "$remove_facts" 'hook-marker write failure remains a bounded result fact'
+assert_equal 1 "$(wc -l <"$tmp/hook-write-failure-log" | tr -d ' ')" 'a failed hook marker receives one removal attempt in one invocation'
+assert_equal 'window-pane-changed[0]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'a failed hook-marker write preserves evidence for a later retry'
+if [ -n "$(tmux_test show-hooks -g window-pane-changed 2>/dev/null | awk 'NF > 1')" ]; then
+	fail 'hook traversal removes the owned hook despite a marker write failure'
+fi
+assert_equal '' "$(global_option @tmux-agents-status-waiting-glyph)" 'hook-marker failure does not stop later default removal'
+assert_absent_global @tmux-agents-status-root 'hook-marker failure does not stop discovery removal'
+remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
+assert_equal '0 true false false' "$remove_facts" 'a later remove retries the failed hook-marker write'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'a later remove clears the retried hook marker'
+
+# Exact ownership removes only its recorded selector beside identical user commands.
+tmux_test kill-server
+tmux_test -f /dev/null new-session -d -s remove-exact-identical-hook
+server_tmux=$(tmux_test display-message -p '#{socket_path}'),$$,0
+tmux_test set-hook -g window-pane-changed "$hook_command"
+TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration" && tas_install_core_configuration "$1"' sh "$root"
+tmux_test set-hook -ag window-pane-changed "$hook_command"
+assert_equal "window-pane-changed[0] $hook_command
+window-pane-changed[1] $hook_command
+window-pane-changed[2] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'exact setup records the middle identical occurrence'
+assert_equal 'window-pane-changed[1]' "$(server_option @tmux-agents-status-hook-window-pane-changed)" 'exact setup records the Core-owned selector'
+remove_facts=$(TMUX="$server_tmux" sh -c '. "$1/scripts/core-configuration"; tas_remove_core_configuration; status=$?; printf "%s %s %s %s\\n" "$status" "$tas_core_configuration_changed" "$tas_core_configuration_query_failed" "$tas_core_configuration_write_failed"; exit "$status"' sh "$root")
+assert_equal '0 true false false' "$remove_facts" 'exact removal completes beside identical user commands'
+assert_equal "window-pane-changed[0] $hook_command
+window-pane-changed[2] $hook_command" "$(tmux_test show-hooks -g window-pane-changed)" 'exact removal preserves identical user occurrences'
+assert_absent_server @tmux-agents-status-hook-window-pane-changed 'exact removal clears only its ownership evidence'
 
 # Exact ownership leaves user hooks on both sides untouched.
 tmux_test kill-server

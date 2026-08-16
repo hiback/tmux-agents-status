@@ -10,6 +10,10 @@ cleanup() {
 	tmux -L "$socket" kill-server >/dev/null 2>&1 || :
 	[ -z "${control_pid-}" ] || kill "$control_pid" >/dev/null 2>&1 || :
 	[ -z "${control_pid-}" ] || wait "$control_pid" 2>/dev/null || :
+	if [ -e "$tmp/core-configuration" ]; then
+		rm -f "$root/scripts/core-configuration"
+		mv "$tmp/core-configuration" "$root/scripts/core-configuration"
+	fi
 	rm -rf "$tmp"
 }
 trap cleanup 0
@@ -58,6 +62,19 @@ node "$root/test/codex-lifecycle.mjs"
 tmux_test -f /dev/null new-session -d -s acceptance
 tmux_test set-hook -g window-pane-changed 'display-message user-hook'
 tmux_test run-shell "$root/tmux-agents-status.tmux"
+
+# A missing ownership module fails the public loader before startup stale cleanup.
+loader_stale=%999990
+tmux_test set-option -s "@tmux-agents-status-state-$loader_stale" 'v2|owner:stale|-|-|failed|g:66666666666666666666666666666666|-|-'
+mv "$root/scripts/core-configuration" "$tmp/core-configuration"
+if TMUX="$(tmux_test display-message -p '#{socket_path}'),$$,0" \
+	"$root/tmux-agents-status.tmux" >"$tmp/missing-loader-output" 2>"$tmp/missing-loader-error"; then
+	fail 'the public loader fails when its ownership module is missing'
+fi
+mv "$tmp/core-configuration" "$root/scripts/core-configuration"
+assert_equal 'v2|owner:stale|-|-|failed|g:66666666666666666666666666666666|-|-' \
+	"$(server_option "@tmux-agents-status-state-$loader_stale")" \
+	'public loader skips startup stale cleanup when its ownership module is missing'
 
 # The public loader delegates a representative installation and publishes discovery metadata.
 assert_equal "$root" "$(option @tmux-agents-status-root)" 'plugin root is installed'
@@ -189,7 +206,8 @@ tmux_test set-option -s "@tmux-agents-status-state-$visit_pane" "$rapid_state"
 tmux_test set-option -su "@tmux-agents-status-ack-$visit_pane"
 tmux_test set-hook -ag window-pane-changed 'wait-for -S tas-rapid-pane-checked'
 tmux_test select-pane -t "$visit_pane" \; select-pane -t "$away_pane" \; wait-for tas-rapid-pane-checked
-assert_equal "$away_pane" "$(tmux_test display-message -p -t "$control_client" '#{pane_id}')" 'programmatic select-away leaves the alert invisible at acknowledgement time'
+assert_equal "$control_client" "$(tmux_test display-message -p -c "$control_client" '#{client_name}')" 'the client-target display query addresses the attached client'
+assert_equal "$away_pane" "$(tmux_test list-clients -F '#{client_name} #{pane_id}' | awk -v client="$control_client" '$1 == client { print $2 }')" 'programmatic select-away leaves the alert invisible at acknowledgement time'
 assert_equal '' "$(server_option "@tmux-agents-status-ack-$visit_pane")" 'rapid invisible selection is not acknowledged'
 assert_equal "$rapid_state" "$(server_option "@tmux-agents-status-state-$visit_pane")" 'rapid selection leaves actual state intact'
 assert_equal '#[push-default]#[default] #[fg=black,underscore]W#[default]#[default]#[pop-default]' "$(render_window "$visit_session" "$visit_window" "$visit_pane")" 'rapid invisible selection remains unread'
