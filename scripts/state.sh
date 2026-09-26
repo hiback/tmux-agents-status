@@ -16,6 +16,15 @@ tas_valid_liveness() {
 	printf '%s\n' "$1" | grep -Eq '^pid:[1-9][0-9]{0,9}$' 2>/dev/null
 }
 
+# Succeeds only when liveness names a pid whose process still exists; `-`
+# carries no process identity and is never considered alive.
+tas_owner_alive() {
+	case $1 in
+	pid:*) kill -0 "${1#pid:}" 2>/dev/null ;;
+	*) return 1 ;;
+	esac
+}
+
 tas_valid_generation() {
 	printf '%s\n' "$1" | grep -Eq '^g:[0-9a-f]{32}$' 2>/dev/null
 }
@@ -244,10 +253,7 @@ tas_read_state() {
 	[ "$tas_state" != none ] || return 1
 	tas_live=true
 	case $tas_liveness in
-	pid:*)
-		tas_pid=${tas_liveness#pid:}
-		kill -0 "$tas_pid" 2>/dev/null || tas_live=false
-		;;
+	pid:*) tas_owner_alive "$tas_liveness" || tas_live=false ;;
 	esac
 	if [ "$tas_live" = false ]; then
 		case $tas_state in

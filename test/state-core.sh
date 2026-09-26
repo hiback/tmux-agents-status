@@ -52,6 +52,9 @@ for option_value in \
 done
 
 owner=pi:11111111-1111-4111-8111-111111111111
+sh -c 'exit 0' &
+dead_pid=$!
+wait "$dead_pid"
 turn=t:22222222-2222-4222-8222-222222222222
 state_option=@tmux-agents-status-state-$pane
 ack_option=@tmux-agents-status-ack-$pane
@@ -127,7 +130,7 @@ assert_equal "$interrupted" "$(option "$state_option")" 'events from a released 
 
 replacement=pi:44444444-4444-4444-8444-444444444444
 replacement_turn=t:55555555-5555-4555-8555-555555555555
-core 2 claim "$owner" "pid:$$"
+core 2 claim "$owner" "pid:$dead_pid"
 core 2 start "$owner" "$old_turn"
 core 2 wait-open "$owner" "$old_turn" stale-request
 replaced_waiting=$(option "$state_option")
@@ -135,7 +138,7 @@ replaced_generation=$(printf '%s\n' "$replaced_waiting" | awk -F '|' '{ print $6
 tmux_test set-option -s "$ack_option" "$replaced_generation"
 core 2 claim "$replacement" -
 replacement_none="v2|$replacement|-|-|none|-|-|-"
-assert_equal "$replacement_none" "$(option "$state_option")" 'a claim atomically replaces active ownership, state, and pending work without publishing failure'
+assert_equal "$replacement_none" "$(option "$state_option")" 'a claim atomically replaces an exited owner, its state, and pending work without publishing failure'
 assert_equal '' "$(option "$ack_option")" 'replacement clears previous acknowledgement'
 core 2 start "$owner" "$old_turn"
 core 2 wait-open "$owner" "$old_turn" stale-request
@@ -156,6 +159,27 @@ core 2 claim "$replacement" -
 core 2 release "$replacement" clear
 assert_equal '' "$(option "$state_option")" 'clear release compare-and-clears an owned no-report record'
 assert_equal '' "$(option "$ack_option")" 'clear release removes acknowledgement'
+
+guarded=pi:99999999-9999-4999-8999-999999999999
+nested=claude:nested-session
+core 2 claim "$guarded" "pid:$$"
+core 2 start "$guarded" "$turn"
+guarded_running="v2|$guarded|pid:$$|$turn|running|-|-|-"
+core 2 claim "$nested" -
+assert_equal "$guarded_running" "$(option "$state_option")" 'an owner without process identity cannot replace a live owner'
+core 2 claim "$nested" "pid:$dead_pid"
+assert_equal "$guarded_running" "$(option "$state_option")" 'a different process cannot replace a live owner'
+core 2 finish "$guarded" "$turn" completed
+guarded_completed=$(option "$state_option")
+core 2 claim "$nested" -
+assert_equal "$guarded_completed" "$(option "$state_option")" 'a live owner stays protected after its turn settles'
+core 2 claim "$replacement" "pid:$$"
+assert_equal "v2|$replacement|pid:$$|-|none|-|-|-" "$(option "$state_option")" 'the owning process can replace its own session'
+core 2 release "$replacement" clear
+core 2 claim "$nested" -
+core 2 claim "$owner" -
+assert_equal "v2|$owner|-|-|none|-|-|-" "$(option "$state_option")" 'an owner without process identity stays replaceable'
+core 2 release "$owner" clear
 
 tmux_test set-option -s "$state_option" 'v1|99|legacy-owner|running|-'
 tmux_test set-option -s "$ack_option" 'legacy-ack'

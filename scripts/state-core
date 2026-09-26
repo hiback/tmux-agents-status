@@ -158,6 +158,11 @@ claim)
 	if read_raw; then
 		if tas_parse_record "$tas_record"; then
 			[ "$tas_owner" != "$owner" ] || exit 0
+			# A live owner process may only be replaced by that same process, so an
+			# agent nested inside another agent's pane cannot take it over.
+			if [ "$tas_liveness" != "$liveness" ] && tas_owner_alive "$tas_liveness"; then
+				exit 0
+			fi
 			[ "$tas_state" = none ] || refresh=true
 		fi
 	elif [ "$tas_error" = query ]; then

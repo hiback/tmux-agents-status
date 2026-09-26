@@ -253,6 +253,7 @@ Adapters stay inactive outside tmux, when the core is missing or incompatible, a
 ## Limitations
 
 - One directly running main agent per pane is supported; subagents and background work do not own panes.
+- An agent started inside another running agent's pane, such as a CLI one agent spawns as a helper, does not take that pane over.
 - The agent and tmux must run on the same host.
 - Some agents do not expose every lifecycle state shown above.
 - Nested tmux, SSH aggregation, and Windows are not supported.
