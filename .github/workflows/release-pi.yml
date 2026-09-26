@@ -5,8 +5,8 @@ on:
     tags: ["pi-v*"]
 
 # The proof reads Actions evidence; the called publication workflow narrows the
-# OIDC grant to its npm publish job. Provider and fallback credentials resolve
-# only from the selected artifact environment, so this caller inherits none.
+# OIDC grant to its npm publish job. Provider and fallback credentials are
+# stored only in the selected artifact environment.
 permissions:
   actions: read
   contents: read
@@ -25,6 +25,10 @@ jobs:
   release:
     needs: main-ci-proof
     uses: ./.github/workflows/release-npm-adapter.yml
+    # Environment secrets resolve in a called workflow's environment-bound job
+    # only when the caller inherits secrets (actions/runner#4453). The
+    # repository and organization hold no secrets of their own.
+    secrets: inherit
     with:
       sha: ${{ github.sha }}
       adapter: pi

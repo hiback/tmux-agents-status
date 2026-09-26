@@ -149,7 +149,8 @@ function assertCaller(name, artifact, tagPattern) {
   assert.deepEqual(keys(job.with), ["artifact", "sha"]);
   assert.equal(job.with.artifact, artifact);
   assertExpression(job.with.sha, "github.sha", `${jobId} must pass the tagged event SHA`);
-  assert.equal(Object.hasOwn(job, "secrets"), false, `${jobId} must pass no secrets`);
+  // Environment secrets reach the called environment-bound job only through inheritance.
+  assert.equal(job.secrets, "inherit", `${jobId} must inherit secrets for its verification environment`);
   assert.equal(Object.hasOwn(job, "steps"), false, `${jobId} must contain no orchestration steps`);
   assert.equal(Object.hasOwn(job, "environment"), false, `${jobId} must not select an environment`);
 }

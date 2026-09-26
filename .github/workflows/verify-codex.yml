@@ -17,6 +17,10 @@ jobs:
       actions: read
       contents: read
     uses: ./.github/workflows/marketplace-verification.yml
+    # Environment secrets resolve in a called workflow's environment-bound job
+    # only when the caller inherits secrets (actions/runner#4453). The
+    # repository and organization hold no secrets of their own.
+    secrets: inherit
     with:
       artifact: codex
       sha: ${{ github.sha }}
