@@ -248,7 +248,7 @@ If no status appears:
 4. Reload or restart the agent. For Codex, also trust the hook in `/hooks`.
 5. Start a turn inside tmux and allow about one second for the first update.
 
-Adapters stay inactive outside tmux, when the core is missing or incompatible, and in Pi print, JSON, or RPC modes.
+Adapters stay inactive outside tmux, when the core is missing or incompatible, in Pi print, JSON, or RPC modes, and in Claude Code print mode (`claude -p`) or Agent SDK sessions.
 
 ## Limitations
 

@@ -28,6 +28,15 @@ case $pane in
 *) exit 0 ;;
 esac
 
+# Only interactive CLI sessions own the pane. SDK and print-mode sessions, such
+# as Claude Code spawned as another agent's model backend, inherit the pane but
+# never take it over. An unset entrypoint predates the variable and counts as
+# the CLI.
+case ${CLAUDE_CODE_ENTRYPOINT:-cli} in
+cli) ;;
+*) exit 0 ;;
+esac
+
 # Only allow-listed top-level lifecycle fields are extracted. The parser keeps
 # string escapes raw, so escaped or nested content can never spoof a field;
 # anything ambiguous fails validation instead of reaching the core.

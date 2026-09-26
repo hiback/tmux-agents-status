@@ -23,6 +23,8 @@ try {
 		TMUX: `${socketPath},${process.pid},0`,
 		TMUX_PANE: pane,
 	};
+	// Hooks model an interactive session even when the suite runs under an SDK agent.
+	delete env.CLAUDE_CODE_ENTRYPOINT;
 
 	for (const [name, value] of [
 		["running-glyph", "R"],

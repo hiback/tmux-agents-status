@@ -10,7 +10,7 @@ const hook = `${root}/packages/claude/bin/tmux-agents-status-hook`;
 // Each hook invocation runs against a stub tmux server and a stub core that
 // records normalized invocations. The served pane record is controlled per
 // step, so translation is verified without duplicating the core state machine.
-function harness({ protocol = "2", coreCode = 0 } = {}) {
+function harness({ protocol = "2", coreCode = 0, entrypoint } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "tmux-agents-status-claude-"));
 	mkdirSync(join(dir, "bin"));
 	mkdirSync(join(dir, "core/scripts"), { recursive: true });
@@ -55,7 +55,12 @@ exit ${coreCode}
 		rmSync(logPath, { force: true });
 		const result = spawnSync(hook, [], {
 			input: typeof event === "string" ? event : JSON.stringify(event),
-			env: { PATH: `${join(dir, "bin")}:${process.env.PATH}`, TMUX: "stub,1,0", TMUX_PANE: "%42" },
+			env: {
+				PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+				TMUX: "stub,1,0",
+				TMUX_PANE: "%42",
+				...(entrypoint === undefined ? {} : { CLAUDE_CODE_ENTRYPOINT: entrypoint }),
+			},
 			encoding: "utf8",
 		});
 		assert.equal(result.error, undefined, "the hook executable starts");
@@ -219,6 +224,34 @@ for (const fixturePath of [
 			[],
 			`${event.hook_event_name} from a subagent is excluded`,
 		);
+}
+
+// Only interactive CLI sessions own the pane; an unset entrypoint counts as the
+// CLI. SDK and print-mode sessions, such as Claude Code serving as another
+// agent's model backend, never touch it.
+{
+	const other = "v2|pi:11111111-1111-4111-8111-111111111111|pid:1|turn:t|running|-|-|-";
+	for (const entrypoint of [undefined, "cli"])
+		assert.deepEqual(
+			shapes(harness({ entrypoint }).run({ hook_event_name: "SessionStart", session_id: session, source: "startup" }).invocations),
+			["claim"],
+			`an interactive session with entrypoint ${entrypoint} claims the pane`,
+		);
+	for (const entrypoint of ["sdk-ts", "sdk-py", "sdk-cli", "mcp", "local-agent"]) {
+		const { run } = harness({ entrypoint });
+		for (const event of [
+			{ hook_event_name: "SessionStart", session_id: session, source: "startup" },
+			{ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "raw-secret" },
+			{ hook_event_name: "PreToolUse", session_id: session, tool_name: "Bash" },
+			{ hook_event_name: "Stop", session_id: session },
+			{ hook_event_name: "SessionEnd", session_id: session, reason: "other" },
+		])
+			assert.deepEqual(
+				shapes(run(event, { record: other }).invocations),
+				[],
+				`${event.hook_event_name} from a ${entrypoint} session is excluded`,
+			);
+	}
 }
 
 // Unsupported event classes emit no normalized operation.
